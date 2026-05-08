@@ -1,0 +1,1802 @@
+const storageKey = "codex.workoutLoggerWeb.v1";
+const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
+const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
+
+const icons = {
+  bolt: "M13 2 4 14h7l-1 8 9-12h-7l1-8Z",
+  plus: "M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4Z",
+  play: "M8 5v14l11-7L8 5Z",
+  check: "M9.2 16.6 4.9 12.3 3.5 13.7 9.2 19.4 21 7.6 19.6 6.2 9.2 16.6Z",
+  trash: "M7 21c-1.1 0-2-.9-2-2V8h14v11c0 1.1-.9 2-2 2H7ZM9 4h6l1 2h5v2H3V6h5l1-2Z",
+  edit: "M4 17.3V20h2.7L17.8 8.9 15.1 6.2 4 17.3ZM19.4 7.3 16.7 4.6l1.2-1.2c.8-.8 2-.8 2.8 0l.2.2c.8.8.8 2 0 2.8l-1.5.9Z",
+  copy: "M8 8h12v12H8V8Zm-4 8V4h12v2H6v10H4Z",
+  x: "M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4 6.4 5Z",
+  list: "M5 5h3v3H5V5Zm5 0h9v2h-9V5Zm0 4h9v2h-9V9Zm-5 4h3v3H5v-3Zm5 0h9v2h-9v-2Zm0 4h9v2h-9v-2ZM5 9h3v3H5V9Z",
+  template: "M5 4h14v16H5V4Zm2 2v3h10V6H7Zm0 5v7h4v-7H7Zm6 0v2h4v-2h-4Zm0 4v3h4v-3h-4Z",
+  calendar: "M7 2h2v2h6V2h2v2h3v18H4V4h3V2Zm11 8H6v10h12V10ZM6 8h12V6H6v2Z",
+  target: "M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm0 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z",
+  chart: "M4 19h16v2H2V3h2v16Zm3-2V9h3v8H7Zm5 0V5h3v12h-3Zm5 0v-6h3v6h-3Z"
+};
+
+const demoTemplates = [
+  {
+    id: uuid(),
+    name: "Upper Strength",
+    notes: "Pressing and pulling.",
+    exercises: [
+      {
+        id: uuid(),
+        name: "Bench Press",
+        notes: "",
+        sets: [
+          { id: uuid(), weight: 135, reps: 5, rir: 2 },
+          { id: uuid(), weight: 145, reps: 5, rir: 1 },
+          { id: uuid(), weight: 145, reps: 5, rir: 1 }
+        ]
+      },
+      {
+        id: uuid(),
+        name: "Barbell Row",
+        notes: "",
+        sets: [
+          { id: uuid(), weight: 115, reps: 8, rir: 2 },
+          { id: uuid(), weight: 125, reps: 8, rir: 2 },
+          { id: uuid(), weight: 125, reps: 8, rir: 1 }
+        ]
+      }
+    ]
+  },
+  {
+    id: uuid(),
+    name: "Lower Hypertrophy",
+    notes: "Controlled reps.",
+    exercises: [
+      {
+        id: uuid(),
+        name: "Squat",
+        notes: "",
+        sets: [
+          { id: uuid(), weight: 185, reps: 8, rir: 2 },
+          { id: uuid(), weight: 195, reps: 8, rir: 2 },
+          { id: uuid(), weight: 185, reps: 10, rir: 1 }
+        ]
+      },
+      {
+        id: uuid(),
+        name: "Romanian Deadlift",
+        notes: "",
+        sets: [
+          { id: uuid(), weight: 155, reps: 10, rir: 2 },
+          { id: uuid(), weight: 165, reps: 10, rir: 1 }
+        ]
+      }
+    ]
+  }
+];
+
+const exerciseBiasRules = [
+  {
+    matches: ["incline bench", "incline press"],
+    muscles: ["Upper chest", "front delts", "triceps"],
+    note: "Incline pressing usually shifts more demand toward the clavicular pec and anterior deltoid than flat pressing."
+  },
+  {
+    matches: ["bench", "chest press", "push up", "push-up"],
+    muscles: ["Chest", "triceps", "front delts"],
+    note: "Horizontal pressing commonly biases pecs and triceps, with front delts assisting."
+  },
+  {
+    matches: ["overhead press", "shoulder press", "military press"],
+    muscles: ["Front delts", "side delts", "triceps"],
+    note: "Vertical pressing tends to bias delts and triceps more than chest."
+  },
+  {
+    matches: ["lateral raise", "side raise"],
+    muscles: ["Side delts"],
+    note: "Abduction-style raises are usually a strong side-delt choice."
+  },
+  {
+    matches: ["rear delt", "reverse fly", "face pull"],
+    muscles: ["Rear delts", "mid traps", "rotator cuff"],
+    note: "Horizontal abduction and external-rotation patterns bias rear delts and upper-back stabilizers."
+  },
+  {
+    matches: ["pulldown", "pull up", "pull-up", "chin up", "chin-up"],
+    muscles: ["Lats", "biceps", "mid back"],
+    note: "Vertical pulls bias lats; grip changes may alter feel more than overall lat activation."
+  },
+  {
+    matches: ["row", "rowing"],
+    muscles: ["Lats", "mid traps", "rhomboids", "biceps"],
+    note: "Rows bias lats and mid-back muscles; torso angle and elbow path change the emphasis."
+  },
+  {
+    matches: ["squat", "leg press", "hack squat"],
+    muscles: ["Quads", "glutes", "adductors"],
+    note: "Squat and leg-press patterns bias knee and hip extensors, especially quads and glutes."
+  },
+  {
+    matches: ["hip thrust", "glute bridge"],
+    muscles: ["Glutes", "hamstrings"],
+    note: "Hip-extension patterns with a bent knee usually bias glutes strongly."
+  },
+  {
+    matches: ["deadlift", "romanian deadlift", "rdl", "good morning"],
+    muscles: ["Hamstrings", "glutes", "spinal erectors"],
+    note: "Hip-hinge patterns bias posterior chain muscles."
+  },
+  {
+    matches: ["leg extension"],
+    muscles: ["Quads"],
+    note: "Knee-extension isolation work is mainly a quadriceps bias."
+  },
+  {
+    matches: ["leg curl", "hamstring curl"],
+    muscles: ["Hamstrings"],
+    note: "Knee-flexion isolation work is mainly a hamstring bias."
+  },
+  {
+    matches: ["curl"],
+    muscles: ["Biceps", "brachialis"],
+    note: "Elbow-flexion curls bias the elbow flexors."
+  },
+  {
+    matches: ["tricep", "triceps", "skullcrusher", "pushdown", "extension"],
+    muscles: ["Triceps"],
+    note: "Elbow-extension work biases the triceps; shoulder angle can shift long-head demand."
+  },
+  {
+    matches: ["calf raise"],
+    muscles: ["Calves"],
+    note: "Plantar-flexion work biases the calf complex."
+  }
+];
+
+let state = loadState();
+const demoMode = new URLSearchParams(location.search).get("demo");
+if (demoMode === "active") {
+  state = hydrateState({
+    templates: demoTemplates,
+    activeWorkout: workoutFromTemplate(demoTemplates[0], "Upper Strength Demo"),
+    sessions: []
+  });
+}
+if (demoMode === "advice" || demoMode === "strength") {
+  const demoSession = workoutFromTemplate(demoTemplates[0], "Upper Strength Demo");
+  demoSession.finishedAt = new Date().toISOString();
+  demoSession.durationSeconds = 3720;
+  demoSession.exercises[0].sets = [
+    { id: uuid(), weight: 135, reps: 8, rir: 2 },
+    { id: uuid(), weight: 145, reps: 6, rir: 1 }
+  ];
+  const olderSession = workoutFromTemplate(demoTemplates[0], "Upper Strength Demo");
+  const olderDate = new Date();
+  olderDate.setDate(olderDate.getDate() - 14);
+  olderSession.finishedAt = olderDate.toISOString();
+  olderSession.durationSeconds = 3540;
+  olderSession.exercises[0].sets = [
+    { id: uuid(), weight: 115, reps: 8, rir: 2 },
+    { id: uuid(), weight: 125, reps: 6, rir: 2 }
+  ];
+  state = hydrateState({
+    templates: [],
+    activeWorkout: null,
+    sessions: [demoSession, olderSession]
+  });
+}
+let selectedTab = "train";
+let selectedTemplateId = state.templates[0]?.id ?? null;
+let selectedCalendarDate = dateKey(new Date());
+let visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
+let selectedAdviceSessionId = state.sessions[0]?.id ?? null;
+let selectedStrengthExercise = firstTrackedExerciseName();
+if (demoMode === "advice") selectedTab = "advice";
+if (demoMode === "strength") selectedTab = "strength";
+let editingTemplate = null;
+let toastTimer = null;
+let timerInterval = null;
+let biasRenderTimer = null;
+let cloudClient = null;
+let cloudUser = null;
+let cloudEmail = "";
+let cloudPassword = "";
+let cloudStatus = hasCloudConfig ? "Sign in to sync" : "Local only";
+let cloudSyncTimer = null;
+let cloudSyncing = false;
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) return hydrateState(JSON.parse(saved));
+  } catch {
+    localStorage.removeItem(storageKey);
+  }
+  return hydrateState({
+    templates: [],
+    activeWorkout: null,
+    sessions: []
+  });
+}
+
+function saveState() {
+  localStorage.setItem(storageKey, JSON.stringify(state));
+  scheduleCloudSync();
+}
+
+function render() {
+  const app = document.querySelector("#app");
+  app.innerHTML = `
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">${icon("bolt")}</div>
+        <div>
+          <h1>Workout Logger</h1>
+          <p class="subline">${state.activeWorkout ? `<span data-workout-timer>${formatWorkoutDuration(state.activeWorkout)}</span> in progress` : cloudStatus}</p>
+        </div>
+      </div>
+      ${renderAccountPanel()}
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        ${renderSidebar()}
+      </aside>
+      <main class="main">
+        ${renderMain()}
+      </main>
+    </div>
+    ${renderTabs()}
+    ${editingTemplate ? renderTemplateModal(editingTemplate) : ""}
+  `;
+  wireEvents();
+  startTimerRefresh();
+}
+
+function renderTabs() {
+  return `
+    <nav class="tabs" aria-label="Sections">
+      ${tabButton("train", "Train", "list")}
+      ${tabButton("templates", "Plans", "template")}
+      ${tabButton("calendar", "Days", "calendar")}
+      ${tabButton("advice", "Advice", "target")}
+      ${tabButton("strength", "Stats", "chart")}
+    </nav>
+  `;
+}
+
+function tabButton(id, label, iconName) {
+  return `<button class="tab ${selectedTab === id ? "active" : ""}" data-tab="${id}">${icon(iconName)}<span>${label}</span></button>`;
+}
+
+function renderAccountPanel() {
+  if (!hasCloudConfig) {
+    return `
+      <div class="account-panel compact">
+        <span class="account-state">Local storage</span>
+        <span class="account-note">Add Supabase keys to enable accounts.</span>
+      </div>
+    `;
+  }
+
+  if (cloudUser) {
+    return `
+      <div class="account-panel signed-in">
+        <span class="account-state">${escapeHtml(cloudUser.email ?? "Signed in")}</span>
+        <div class="account-actions">
+          <button class="ghost-button" data-action="sync-now">Sync</button>
+          <button class="ghost-button" data-action="sign-out">Sign out</button>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="account-panel">
+      <input type="email" placeholder="Email" value="${escapeAttribute(cloudEmail)}" data-bind="cloud.email" autocomplete="email">
+      <input type="password" placeholder="Password" data-bind="cloud.password" autocomplete="current-password">
+      <button class="ghost-button" data-action="sign-in">Sign in</button>
+      <button class="button" data-action="sign-up">Create</button>
+    </div>
+  `;
+}
+
+function renderSidebar() {
+  if (selectedTab === "calendar") {
+    return `
+      <div class="panel-title">
+        <h2>Workout Days</h2>
+      </div>
+      <div class="history-list">
+        ${state.sessions.length ? sessionsByMostRecentDay().map(renderWorkoutDayButton).join("") : `<div class="empty">No finished workouts.</div>`}
+      </div>
+    `;
+  }
+
+  if (selectedTab === "advice") {
+    return `
+      <div class="panel-title">
+        <h2>Pick Workout</h2>
+      </div>
+      <div class="history-list">
+        ${state.sessions.length ? state.sessions.map(renderAdviceWorkoutButton).join("") : `<div class="empty">Finish a workout to get advice.</div>`}
+      </div>
+    `;
+  }
+
+  if (selectedTab === "strength") {
+    const names = trackedExerciseNames();
+    return `
+      <div class="panel-title">
+        <h2>Exercises</h2>
+      </div>
+      <div class="history-list">
+        ${names.length ? names.map(renderStrengthExerciseButton).join("") : `<div class="empty">Finish workouts to track strength.</div>`}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="panel-title">
+      <h2>Workouts</h2>
+      <button class="icon-button" title="New template" data-action="new-template">${icon("plus")}</button>
+    </div>
+    <div class="template-list">
+      ${state.templates.length ? state.templates.map(renderTemplateButton).join("") : `<div class="empty">No templates.</div>`}
+    </div>
+  `;
+}
+
+function renderTemplateButton(template) {
+  const selected = selectedTemplateId === template.id ? "selected" : "";
+  return `
+    <button class="row ${selected}" data-template-id="${template.id}">
+      <span class="row-top">
+        <span class="row-title">${escapeHtml(template.name)}</span>
+        <span class="meta">${template.exercises.length} exercises</span>
+      </span>
+      ${template.notes ? `<span class="note-preview">${escapeHtml(template.notes)}</span>` : ""}
+    </button>
+  `;
+}
+
+function renderWorkoutDayButton(day) {
+  const selected = selectedCalendarDate === day.key ? "selected" : "";
+  return `
+    <button class="row ${selected}" data-calendar-date="${day.key}">
+      <span class="row-top">
+        <span class="row-title">${formatCalendarHeading(day.key)}</span>
+        <span class="meta">${day.sessions.length} workout${day.sessions.length === 1 ? "" : "s"}</span>
+      </span>
+      <span class="meta">${day.sessions.reduce((total, session) => total + session.exercises.length, 0)} exercises, ${day.sessions.reduce((total, session) => total + countSets(session.exercises), 0)} sets</span>
+    </button>
+  `;
+}
+
+function renderAdviceWorkoutButton(session) {
+  const selected = adviceSession().id === session.id ? "selected" : "";
+  return `
+    <button class="row ${selected}" data-advice-session-id="${session.id}">
+      <span class="row-top">
+        <span class="row-title">${escapeHtml(session.title)}</span>
+        <span class="meta">${formatDate(session.finishedAt)}</span>
+      </span>
+      <span class="meta">${session.exercises.length} exercises, ${countSets(session.exercises)} sets</span>
+    </button>
+  `;
+}
+
+function renderStrengthExerciseButton(name) {
+  const selected = normalizeExerciseName(name) === normalizeExerciseName(selectedStrengthExercise) ? "selected" : "";
+  return `
+    <button class="row ${selected}" data-strength-exercise="${escapeAttribute(name)}">
+      <span class="row-title">${escapeHtml(name)}</span>
+      <span class="meta">${strengthPointsForExercise(name).length} logged sessions</span>
+    </button>
+  `;
+}
+
+function renderMain() {
+  if (selectedTab === "templates") return renderTemplatesMain();
+  if (selectedTab === "calendar") return renderCalendarMain();
+  if (selectedTab === "advice") return renderAdviceMain();
+  if (selectedTab === "strength") return renderStrengthMain();
+  return renderTrainMain();
+}
+
+function renderTrainMain() {
+  if (state.activeWorkout) return renderActiveWorkout();
+  const selectedTemplate = state.templates.find(template => template.id === selectedTemplateId) ?? state.templates[0];
+  return `
+    <div class="section-head">
+      <h2>Start Workout</h2>
+      <button class="button" data-action="start-empty">${icon("plus")} Empty</button>
+    </div>
+    ${
+      selectedTemplate
+        ? `
+          <section class="summary-band">
+            <div class="field">
+              <label>Selected</label>
+              <strong>${escapeHtml(selectedTemplate.name)}</strong>
+              ${selectedTemplate.notes ? `<span class="note-preview">${escapeHtml(selectedTemplate.notes)}</span>` : ""}
+            </div>
+            <div class="stat"><strong>${selectedTemplate.exercises.length}</strong><span>Exercises</span></div>
+          </section>
+          <div class="action-row">
+            <button class="button" data-action="start-template" data-template-id="${selectedTemplate.id}">${icon("play")} Start</button>
+            <button class="ghost-button" data-action="edit-template" data-template-id="${selectedTemplate.id}">${icon("edit")} Edit</button>
+          </div>
+          <div class="exercise-list" style="margin-top:16px">
+            ${selectedTemplate.exercises.map(exercise => renderTemplateExercisePreview(exercise)).join("")}
+          </div>
+        `
+        : `<div class="empty">Create a workout template or start empty.</div>`
+    }
+  `;
+}
+
+function renderActiveWorkout() {
+  const workout = state.activeWorkout;
+  return `
+    <div class="section-head">
+      <h2>Active Workout</h2>
+      <div class="action-row">
+        <button class="danger-button" data-action="discard-workout">${icon("trash")} Discard</button>
+        <button class="button" data-action="finish-workout" ${workout.exercises.length ? "" : "disabled"}>${icon("check")} Finish</button>
+      </div>
+    </div>
+    <section class="summary-band">
+      <div class="field">
+        <label for="workout-title">Workout</label>
+        <input id="workout-title" value="${escapeAttribute(workout.title)}" data-bind="active.title">
+      </div>
+      <div class="stat"><strong>${workout.exercises.length}</strong><span>Exercises</span></div>
+      <div class="stat"><strong>${countSets(workout.exercises)}</strong><span>Sets</span></div>
+      <div class="stat"><strong>${averageWeight(workout.exercises)}</strong><span>Avg Weight</span></div>
+      <div class="stat"><strong>${averageRir(workout.exercises)}</strong><span>Avg RIR</span></div>
+      <div class="stat"><strong data-workout-timer>${formatWorkoutDuration(workout)}</strong><span>Timer</span></div>
+      <div class="field full">
+        <label for="finish-notes">Finish notes</label>
+        <textarea id="finish-notes" data-bind="active.workoutNotes">${escapeHtml(workout.workoutNotes)}</textarea>
+      </div>
+    </section>
+    <div class="exercise-list">
+      ${workout.exercises.map((exercise, index) => renderEditableExercise(exercise, index, "active")).join("")}
+    </div>
+    <div class="action-row" style="margin-top:14px">
+      <button class="ghost-button" data-action="add-active-exercise">${icon("plus")} Exercise</button>
+    </div>
+  `;
+}
+
+function renderTemplatesMain() {
+  const selectedTemplate = state.templates.find(template => template.id === selectedTemplateId);
+  return `
+    <div class="section-head">
+      <h2>Templates</h2>
+      <button class="button" data-action="new-template">${icon("plus")} New</button>
+    </div>
+    ${
+      selectedTemplate
+        ? `
+          <section class="summary-band">
+            <div class="field">
+              <label>Template</label>
+              <strong>${escapeHtml(selectedTemplate.name)}</strong>
+              ${selectedTemplate.notes ? `<span class="note-preview">${escapeHtml(selectedTemplate.notes)}</span>` : ""}
+            </div>
+            <div class="stat"><strong>${selectedTemplate.exercises.length}</strong><span>Exercises</span></div>
+          </section>
+          <div class="action-row">
+            <button class="button" data-action="start-template" data-template-id="${selectedTemplate.id}">${icon("play")} Start</button>
+            <button class="ghost-button" data-action="edit-template" data-template-id="${selectedTemplate.id}">${icon("edit")} Edit</button>
+            <button class="ghost-button" data-action="duplicate-template" data-template-id="${selectedTemplate.id}">${icon("copy")} Duplicate</button>
+            <button class="danger-button" data-action="delete-template" data-template-id="${selectedTemplate.id}">${icon("trash")} Delete</button>
+          </div>
+          <div class="exercise-list" style="margin-top:16px">
+            ${selectedTemplate.exercises.map(exercise => renderTemplateExercisePreview(exercise)).join("")}
+          </div>
+        `
+        : `<div class="empty">No templates.</div>`
+    }
+  `;
+}
+
+function renderCalendarMain() {
+  const selectedSessions = sessionsForDate(selectedCalendarDate);
+  return `
+    <div class="section-head">
+      <h2>Calendar</h2>
+      <div class="action-row">
+        <button class="ghost-button" data-action="previous-month">Previous</button>
+        <button class="ghost-button" data-action="today">Today</button>
+        <button class="ghost-button" data-action="next-month">Next</button>
+      </div>
+    </div>
+    <section class="calendar-frame">
+      <div class="calendar-title">${formatMonthTitle(visibleCalendarMonth)}</div>
+      <div class="calendar-grid">
+        ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => `<div class="calendar-weekday">${day}</div>`).join("")}
+        ${calendarCells(visibleCalendarMonth).map(renderCalendarCell).join("")}
+      </div>
+    </section>
+    <section class="day-detail">
+      <div class="section-head">
+        <h2>${formatCalendarHeading(selectedCalendarDate)}</h2>
+        <span class="meta">${selectedSessions.length} workout${selectedSessions.length === 1 ? "" : "s"}</span>
+      </div>
+      ${
+        selectedSessions.length
+          ? selectedSessions.map(renderSessionDetail).join("")
+          : `<div class="empty">No workouts logged for this day.</div>`
+      }
+    </section>
+  `;
+}
+
+function renderAdviceMain() {
+  const session = adviceSession();
+  if (!session) return `<div class="empty">Finish a workout to unlock specific advice.</div>`;
+  const advice = buildAdvice(session);
+  return `
+    <div class="section-head">
+      <h2>Advice</h2>
+      <span class="meta">${escapeHtml(session.title)} - ${formatDate(session.finishedAt)}</span>
+    </div>
+    <section class="summary-band">
+      <div class="field">
+        <label>Selected workout</label>
+        <strong>${escapeHtml(session.title)}</strong>
+        <span class="note-preview">${advice.overview}</span>
+      </div>
+      <div class="stat"><strong>${advice.frequency}</strong><span>Days / 14</span></div>
+      <div class="stat"><strong>${advice.totalSets}</strong><span>Sets</span></div>
+      <div class="stat"><strong>${advice.averageRir}</strong><span>Avg RIR</span></div>
+      <div class="stat"><strong>${formatWorkoutDuration(session)}</strong><span>Duration</span></div>
+    </section>
+    <div class="advice-grid">
+      ${advice.cards.map(card => `
+        <article class="advice-card">
+          <span>${escapeHtml(card.label)}</span>
+          <h3>${escapeHtml(card.title)}</h3>
+          <p>${escapeHtml(card.body)}</p>
+        </article>
+      `).join("")}
+    </div>
+    <section class="calendar-frame">
+      <div class="calendar-title">Muscle Bias This Workout</div>
+      <div class="bias-tags">
+        ${advice.muscleSummary.length ? advice.muscleSummary.map(item => `<span>${escapeHtml(item.muscle)} - ${item.sets} sets</span>`).join("") : `<span>No known muscle matches yet</span>`}
+      </div>
+    </section>
+    <section class="calendar-frame">
+      <div class="calendar-title">Evidence basis</div>
+      <p class="note-preview">Recommendations use current resistance-training evidence: prioritize enough weekly hard sets, recoverable frequency, mostly 0-3 RIR work, progressive overload, and occasional lower-fatigue weeks when performance stalls.</p>
+    </section>
+  `;
+}
+
+function renderStrengthMain() {
+  const names = trackedExerciseNames();
+  const selected = selectedStrengthExercise || names[0];
+  if (!selected) return `<div class="empty">Finish workouts to build strength graphs.</div>`;
+  const points = strengthPointsForExercise(selected);
+  return `
+    <div class="section-head">
+      <h2>Strength</h2>
+      <span class="meta">${escapeHtml(selected)}</span>
+    </div>
+    <section class="summary-band">
+      <div class="field">
+        <label>Exercise</label>
+        <strong>${escapeHtml(selected)}</strong>
+        <span class="note-preview">Graph uses estimated 1RM from your best set each session: weight × (1 + reps / 30).</span>
+      </div>
+      <div class="stat"><strong>${points.length}</strong><span>Sessions</span></div>
+      <div class="stat"><strong>${points.at(-1)?.estimate ?? "0"}</strong><span>Latest e1RM</span></div>
+      <div class="stat"><strong>${strengthDelta(points)}</strong><span>Change</span></div>
+    </section>
+    <section class="calendar-frame">
+      <div class="calendar-title">Estimated Strength Trend</div>
+      ${renderStrengthGraph(points)}
+    </section>
+    <div class="exercise-list">
+      ${points.map(point => `
+        <section class="exercise-card">
+          <div class="row-top">
+            <strong>${formatCalendarHeading(point.date)}</strong>
+            <span class="meta">e1RM ${point.estimate}</span>
+          </div>
+          <div class="sets">
+            <div class="set-row">
+              <div class="set-number">Best</div>
+              <div class="stat"><strong>${point.weight}</strong><span>Weight</span></div>
+              <div class="stat"><strong>${point.reps}</strong><span>Reps</span></div>
+              <div class="stat"><strong>${displaySetValue(point.rir)}</strong><span>RIR</span></div>
+              <div></div>
+            </div>
+          </div>
+        </section>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderCalendarCell(cell) {
+  const sessions = sessionsForDate(cell.key);
+  const selected = selectedCalendarDate === cell.key ? "selected" : "";
+  const muted = cell.inMonth ? "" : "muted";
+  const hasWorkouts = sessions.length ? "has-workouts" : "";
+  return `
+    <button class="calendar-cell ${selected} ${muted} ${hasWorkouts}" data-calendar-date="${cell.key}">
+      <span>${new Date(`${cell.key}T12:00:00`).getDate()}</span>
+      ${sessions.length ? `<strong>${sessions.length}</strong>` : ""}
+    </button>
+  `;
+}
+
+function renderSessionDetail(session) {
+  return `
+    <article class="session-detail">
+      <div class="section-head">
+        <h3>${escapeHtml(session.title)}</h3>
+        <button class="danger-button" data-action="delete-session" data-session-id="${session.id}">${icon("trash")} Delete</button>
+      </div>
+      <section class="summary-band">
+        <div class="field">
+          <label>Finished</label>
+          <strong>${formatDate(session.finishedAt)}</strong>
+          ${session.workoutNotes ? `<span class="note-preview">${escapeHtml(session.workoutNotes)}</span>` : ""}
+        </div>
+        <div class="stat"><strong>${session.exercises.length}</strong><span>Exercises</span></div>
+        <div class="stat"><strong>${countSets(session.exercises)}</strong><span>Sets</span></div>
+        <div class="stat"><strong>${formatWorkoutDuration(session)}</strong><span>Duration</span></div>
+        <div class="stat"><strong>${averageWeight(session.exercises)}</strong><span>Avg Weight</span></div>
+        <div class="stat"><strong>${averageRir(session.exercises)}</strong><span>Avg RIR</span></div>
+      </section>
+      <div class="exercise-list">
+        ${session.exercises.map(exercise => renderReadOnlyExercise(exercise)).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderReadOnlyExercise(exercise) {
+  return `
+    <section class="exercise-card">
+      <div class="exercise-head">
+        <div>
+          <strong>${escapeHtml(exercise.name)}</strong>
+          ${exercise.notes ? `<div class="note-preview">${escapeHtml(exercise.notes)}</div>` : ""}
+          ${renderMuscleBias(exercise.name)}
+        </div>
+      </div>
+      <div class="sets">
+        ${exercise.sets.map((set, index) => `
+          <div class="set-row">
+            <div class="set-number">#${index + 1}</div>
+            <div class="stat"><strong>${displaySetValue(set.weight)}</strong><span>Weight</span></div>
+            <div class="stat"><strong>${displaySetValue(set.reps)}</strong><span>Reps</span></div>
+            <div class="stat"><strong>${displaySetValue(set.rir)}</strong><span>RIR</span></div>
+            <div></div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderTemplateExercisePreview(exercise) {
+  return `
+    <section class="exercise-card">
+      <div class="exercise-head">
+        <div>
+          <strong>${escapeHtml(exercise.name)}</strong>
+          ${exercise.notes ? `<div class="note-preview">${escapeHtml(exercise.notes)}</div>` : ""}
+          ${renderMuscleBias(exercise.name)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderEditableExercise(exercise, index, scope) {
+  return `
+    <section class="exercise-card" data-exercise-index="${index}" data-scope="${scope}">
+      <div class="exercise-head">
+        <div class="field">
+          <label>Exercise</label>
+          <input value="${escapeAttribute(exercise.name)}" data-bind="${scope}.exercise.${index}.name">
+        </div>
+        <button class="icon-button" title="Remove exercise" data-action="remove-exercise" data-scope="${scope}" data-exercise-index="${index}">${icon("trash")}</button>
+      </div>
+      ${renderMuscleBias(exercise.name)}
+      <div class="sets">
+        ${exercise.sets.map((set, setIndex) => renderSetRow(set, index, setIndex, scope)).join("")}
+      </div>
+      <div class="action-row">
+        <button class="ghost-button" data-action="add-set" data-scope="${scope}" data-exercise-index="${index}">${icon("plus")} Set</button>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <label>Exercise notes</label>
+        <textarea data-bind="${scope}.exercise.${index}.notes">${escapeHtml(exercise.notes)}</textarea>
+      </div>
+    </section>
+  `;
+}
+
+function renderTemplateExerciseEditor(exercise, index) {
+  return `
+    <section class="exercise-card" data-exercise-index="${index}" data-scope="template">
+      <div class="exercise-head">
+        <div class="field">
+          <label>Exercise</label>
+          <input value="${escapeAttribute(exercise.name)}" data-bind="template.exercise.${index}.name">
+        </div>
+        <button class="icon-button" title="Remove exercise" data-action="remove-exercise" data-scope="template" data-exercise-index="${index}">${icon("trash")}</button>
+      </div>
+      ${renderMuscleBias(exercise.name)}
+      <div class="field" style="margin-top:12px">
+        <label>Preset notes</label>
+        <textarea data-bind="template.exercise.${index}.notes">${escapeHtml(exercise.notes)}</textarea>
+      </div>
+    </section>
+  `;
+}
+
+function renderSetRow(set, exerciseIndex, setIndex, scope) {
+  const exerciseName = exerciseNameForSet(scope, exerciseIndex);
+  const previous = previousSetForExercise(exerciseName, setIndex);
+  return `
+    <div class="set-row">
+      <div class="set-number">#${setIndex + 1}</div>
+      <div class="field">
+        <label>Weight</label>
+        <input type="number" min="0" max="2000" value="${set.weight ?? ""}" placeholder="${previousPlaceholder(previous, "weight")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.weight">
+      </div>
+      <div class="field">
+        <label>Reps</label>
+        <input type="number" min="0" max="100" value="${set.reps ?? ""}" placeholder="${previousPlaceholder(previous, "reps")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.reps">
+      </div>
+      <div class="field">
+        <label>RIR</label>
+        <input type="number" min="0" max="10" value="${set.rir ?? ""}" placeholder="${previousPlaceholder(previous, "rir")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.rir">
+      </div>
+      <button class="icon-button" title="Remove set" data-action="remove-set" data-scope="${scope}" data-exercise-index="${exerciseIndex}" data-set-index="${setIndex}">${icon("x")}</button>
+    </div>
+  `;
+}
+
+function renderTemplateModal(template) {
+  return `
+    <div class="modal-backdrop" data-action="close-modal">
+      <section class="modal" role="dialog" aria-modal="true" aria-label="Template editor" data-modal>
+        <div class="modal-head">
+          <h2>Template</h2>
+          <button class="icon-button" title="Close" data-action="close-modal">${icon("x")}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field-grid">
+            <div class="field">
+              <label>Name</label>
+              <input value="${escapeAttribute(template.name)}" data-bind="template.name">
+            </div>
+            <div class="field full">
+              <label>Notes</label>
+              <textarea data-bind="template.notes">${escapeHtml(template.notes)}</textarea>
+            </div>
+          </div>
+          <div class="exercise-list" style="margin-top:14px">
+            ${template.exercises.map((exercise, index) => renderTemplateExerciseEditor(exercise, index)).join("")}
+          </div>
+          <div class="action-row" style="margin-top:14px">
+            <button class="ghost-button" data-action="add-template-exercise">${icon("plus")} Exercise</button>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="ghost-button" data-action="close-modal">Cancel</button>
+          <button class="button" data-action="save-template">${icon("check")} Save</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function wireEvents() {
+  document.querySelectorAll("[data-tab]").forEach(button => {
+    button.addEventListener("click", () => {
+      selectedTab = button.dataset.tab;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-template-id]").forEach(element => {
+    if (element.matches("button.row")) {
+      element.addEventListener("click", () => {
+        selectedTemplateId = element.dataset.templateId;
+        render();
+      });
+    }
+  });
+
+  document.querySelectorAll("[data-session-id]").forEach(element => {
+    element.addEventListener("click", () => {
+      selectedCalendarDate = sessionDateKey(element.dataset.sessionId) ?? selectedCalendarDate;
+      visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-calendar-date]").forEach(element => {
+    element.addEventListener("click", () => {
+      selectedCalendarDate = element.dataset.calendarDate;
+      visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-advice-session-id]").forEach(element => {
+    element.addEventListener("click", () => {
+      selectedAdviceSessionId = element.dataset.adviceSessionId;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-strength-exercise]").forEach(element => {
+    element.addEventListener("click", () => {
+      selectedStrengthExercise = element.dataset.strengthExercise;
+      render();
+    });
+  });
+
+  document.querySelectorAll("[data-action]").forEach(element => {
+    element.addEventListener("click", event => {
+      const action = element.dataset.action;
+      if (action === "close-modal" && event.target.closest("[data-modal]") && event.target !== element) return;
+      void handleAction(action, element);
+    });
+  });
+
+  document.querySelectorAll("[data-bind]").forEach(field => {
+    field.addEventListener("input", () => {
+      updateBinding(field.dataset.bind, field.value);
+    });
+  });
+
+}
+
+async function handleAction(action, element) {
+  switch (action) {
+    case "start-empty":
+      state.activeWorkout = newWorkout("Workout", []);
+      saveAndRender("Workout started");
+      break;
+    case "start-template":
+      startTemplate(element.dataset.templateId);
+      break;
+    case "finish-workout":
+      finishWorkout();
+      break;
+    case "discard-workout":
+      if (confirm("Discard active workout?")) {
+        state.activeWorkout = null;
+        saveAndRender("Workout discarded");
+      }
+      break;
+    case "new-template":
+      editingTemplate = newTemplate();
+      render();
+      break;
+    case "edit-template":
+      editTemplate(element.dataset.templateId);
+      break;
+    case "duplicate-template":
+      duplicateTemplate(element.dataset.templateId);
+      break;
+    case "delete-template":
+      deleteTemplate(element.dataset.templateId);
+      break;
+    case "delete-session":
+      deleteSession(element.dataset.sessionId);
+      break;
+    case "previous-month":
+      shiftCalendarMonth(-1);
+      break;
+    case "next-month":
+      shiftCalendarMonth(1);
+      break;
+    case "today":
+      selectedCalendarDate = dateKey(new Date());
+      visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
+      render();
+      break;
+    case "add-active-exercise":
+      state.activeWorkout.exercises.push(newExercise("New Exercise"));
+      saveAndRender("Exercise added");
+      break;
+    case "add-template-exercise":
+      editingTemplate.exercises.push(newTemplateExercise("New Exercise"));
+      render();
+      break;
+    case "remove-exercise":
+      removeExercise(element.dataset.scope, Number(element.dataset.exerciseIndex));
+      break;
+    case "add-set":
+      addSet(element.dataset.scope, Number(element.dataset.exerciseIndex));
+      break;
+    case "remove-set":
+      removeSet(element.dataset.scope, Number(element.dataset.exerciseIndex), Number(element.dataset.setIndex));
+      break;
+    case "save-template":
+      saveTemplate();
+      break;
+    case "close-modal":
+      editingTemplate = null;
+      render();
+      break;
+    case "sign-in":
+      await signIn();
+      break;
+    case "sign-up":
+      await signUp();
+      break;
+    case "sign-out":
+      await signOut();
+      break;
+    case "sync-now":
+      await pushCloudState(true);
+      break;
+  }
+}
+
+function updateBinding(binding, value) {
+  const parts = binding.split(".");
+  if (parts[0] === "cloud") {
+    if (parts[1] === "email") cloudEmail = value;
+    if (parts[1] === "password") cloudPassword = value;
+    return;
+  }
+
+  if (parts[0] === "active" && state.activeWorkout) {
+    if (parts[1] === "title") state.activeWorkout.title = value.trimStart() || "Workout";
+    if (parts[1] === "workoutNotes") state.activeWorkout.workoutNotes = value;
+    if (parts[1] === "exercise") {
+      state.activeWorkout.exercises[Number(parts[2])][parts[3]] = value;
+      if (parts[3] === "name") scheduleBiasRender();
+    }
+    if (parts[1] === "set") {
+      const set = state.activeWorkout.exercises[Number(parts[2])].sets[Number(parts[3])];
+      set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+    }
+    saveState();
+  }
+
+  if (parts[0] === "template" && editingTemplate) {
+    if (parts[1] === "name") editingTemplate.name = value;
+    if (parts[1] === "notes") editingTemplate.notes = value;
+    if (parts[1] === "exercise") {
+      editingTemplate.exercises[Number(parts[2])][parts[3]] = value;
+      if (parts[3] === "name") scheduleBiasRender();
+    }
+    if (parts[1] === "set") {
+      const set = editingTemplate.exercises[Number(parts[2])].sets[Number(parts[3])];
+      set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+    }
+  }
+}
+
+function startTemplate(id) {
+  const template = state.templates.find(item => item.id === id);
+  if (!template) return;
+  state.activeWorkout = workoutFromTemplate(template);
+  selectedTab = "train";
+  saveAndRender("Workout started");
+}
+
+function finishWorkout() {
+  if (!state.activeWorkout) return;
+  const session = {
+    ...state.activeWorkout,
+    finishedAt: new Date().toISOString(),
+    durationSeconds: elapsedSeconds(state.activeWorkout)
+  };
+  state.sessions.unshift(session);
+  selectedCalendarDate = sessionDateKey(session.id) ?? dateKey(new Date());
+  visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
+  selectedAdviceSessionId = session.id;
+  state.activeWorkout = null;
+  selectedTab = "calendar";
+  saveAndRender("Workout finished");
+}
+
+function editTemplate(id) {
+  const template = state.templates.find(item => item.id === id);
+  if (!template) return;
+  editingTemplate = deepClone(template);
+  render();
+}
+
+function duplicateTemplate(id) {
+  const template = state.templates.find(item => item.id === id);
+  if (!template) return;
+  const copy = deepClone(template);
+  copy.id = uuid();
+  copy.name = `${copy.name} Copy`;
+  copy.exercises = copy.exercises.map(exercise => ({
+    ...exercise,
+    id: uuid(),
+    sets: []
+  }));
+  state.templates.unshift(copy);
+  selectedTemplateId = copy.id;
+  saveAndRender("Template duplicated");
+}
+
+function deleteTemplate(id) {
+  if (!confirm("Delete template?")) return;
+  state.templates = state.templates.filter(template => template.id !== id);
+  selectedTemplateId = state.templates[0]?.id ?? null;
+  saveAndRender("Template deleted");
+}
+
+function deleteSession(id) {
+  if (!confirm("Delete workout from history?")) return;
+  state.sessions = state.sessions.filter(session => session.id !== id);
+  selectedAdviceSessionId = state.sessions[0]?.id ?? null;
+  saveAndRender("Workout deleted");
+}
+
+function saveTemplate() {
+  if (!editingTemplate) return;
+  const normalized = {
+    ...editingTemplate,
+    name: editingTemplate.name.trim() || "Workout",
+    notes: editingTemplate.notes.trim(),
+    exercises: editingTemplate.exercises
+      .map(exercise => ({
+        id: exercise.id ?? uuid(),
+        name: exercise.name.trim(),
+        notes: exercise.notes.trim(),
+        sets: []
+      }))
+      .filter(exercise => exercise.name)
+  };
+  const index = state.templates.findIndex(template => template.id === normalized.id);
+  if (index >= 0) {
+    state.templates[index] = normalized;
+  } else {
+    state.templates.unshift(normalized);
+  }
+  selectedTemplateId = normalized.id;
+  editingTemplate = null;
+  saveAndRender("Template saved");
+}
+
+function removeExercise(scope, exerciseIndex) {
+  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  if (!target) return;
+  target.exercises.splice(exerciseIndex, 1);
+  if (scope === "active") saveState();
+  render();
+}
+
+function addSet(scope, exerciseIndex) {
+  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  if (!target) return;
+  const sets = target.exercises[exerciseIndex].sets;
+  const previous = sets.at(-1) ?? { weight: 0, reps: 8, rir: 2 };
+  sets.push(newSet(previous.weight ?? 0, previous.reps, previous.rir));
+  if (scope === "active") saveState();
+  render();
+}
+
+function removeSet(scope, exerciseIndex, setIndex) {
+  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  if (!target) return;
+  target.exercises[exerciseIndex].sets.splice(setIndex, 1);
+  if (scope === "active") saveState();
+  render();
+}
+
+function newWorkout(title, exercises) {
+  return {
+    id: uuid(),
+    title,
+    startedAt: new Date().toISOString(),
+    workoutNotes: "",
+    exercises
+  };
+}
+
+function workoutFromTemplate(template, title = template.name) {
+  return newWorkout(
+    title,
+    template.exercises.map(exercise => ({
+      id: uuid(),
+      name: exercise.name,
+      notes: exercise.notes,
+      sets: [newSet()]
+    }))
+  );
+}
+
+function newTemplate() {
+  return {
+    id: uuid(),
+    name: "New Workout",
+    notes: "",
+    exercises: [newTemplateExercise("New Exercise")]
+  };
+}
+
+function newTemplateExercise(name) {
+  return {
+    id: uuid(),
+    name,
+    notes: "",
+    sets: []
+  };
+}
+
+function newExercise(name) {
+  return {
+    id: uuid(),
+    name,
+    notes: "",
+    sets: [newSet()]
+  };
+}
+
+function newSet(weight = "", reps = "", rir = "") {
+  return {
+    id: uuid(),
+    weight,
+    reps,
+    rir
+  };
+}
+
+function countSets(exercises) {
+  return exercises.reduce((total, exercise) => total + (exercise.sets?.length ?? 0), 0);
+}
+
+function averageRir(exercises) {
+  const sets = exercises.flatMap(exercise => exercise.sets ?? []);
+  if (!sets.length) return "0";
+  return (sets.reduce((total, set) => total + Number(set.rir || 0), 0) / sets.length).toFixed(1);
+}
+
+function averageWeight(exercises) {
+  const weightedSets = exercises.flatMap(exercise => exercise.sets ?? []).filter(set => Number(set.weight) > 0);
+  if (!weightedSets.length) return "0";
+  const average = weightedSets.reduce((total, set) => total + Number(set.weight || 0), 0) / weightedSets.length;
+  return String(Math.round(average));
+}
+
+function displaySetValue(value) {
+  return value === "" || value == null ? "-" : value;
+}
+
+function clampNumber(value, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(max, Math.round(parsed)));
+}
+
+function clampOptionalNumber(value, max) {
+  if (String(value).trim() === "") return "";
+  return clampNumber(value, max);
+}
+
+function maxForSetField(field) {
+  if (field === "rir") return 10;
+  if (field === "weight") return 2000;
+  return 100;
+}
+
+function exerciseNameForSet(scope, exerciseIndex) {
+  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  return target?.exercises?.[exerciseIndex]?.name ?? "";
+}
+
+function previousSetForExercise(exerciseName, setIndex) {
+  const normalized = normalizeExerciseName(exerciseName);
+  if (!normalized) return null;
+  const sorted = [...state.sessions].sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+  for (const session of sorted) {
+    const exercise = session.exercises.find(item => normalizeExerciseName(item.name) === normalized);
+    const set = exercise?.sets?.[setIndex];
+    if (set && hasLoggedSetValue(set)) return set;
+  }
+  return null;
+}
+
+function previousPlaceholder(previous, field) {
+  if (!previous || previous[field] === "" || previous[field] == null) return "No previous";
+  return `Prev ${previous[field]}`;
+}
+
+function hasLoggedSetValue(set) {
+  return ["weight", "reps", "rir"].some(field => set[field] !== "" && set[field] != null && Number(set[field]) > 0);
+}
+
+function normalizeExerciseName(name) {
+  return String(name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function trackedExerciseNames() {
+  const names = new Map();
+  for (const session of state.sessions) {
+    for (const exercise of session.exercises) {
+      const key = normalizeExerciseName(exercise.name);
+      if (key && bestStrengthSet(exercise.sets ?? []) && !names.has(key)) names.set(key, exercise.name);
+    }
+  }
+  return [...names.values()].sort((a, b) => a.localeCompare(b));
+}
+
+function firstTrackedExerciseName() {
+  return trackedExerciseNames()[0] ?? "";
+}
+
+function strengthPointsForExercise(name) {
+  const normalized = normalizeExerciseName(name);
+  if (!normalized) return [];
+  return state.sessions
+    .map(session => {
+      const exercise = session.exercises.find(item => normalizeExerciseName(item.name) === normalized);
+      if (!exercise) return null;
+      const best = bestStrengthSet(exercise.sets);
+      if (!best) return null;
+      return {
+        date: dateKey(new Date(session.finishedAt ?? session.startedAt)),
+        weight: best.weight,
+        reps: best.reps,
+        rir: best.rir,
+        estimate: estimatedOneRepMax(best)
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function bestStrengthSet(sets) {
+  return sets
+    .filter(set => Number(set.weight) > 0 && Number(set.reps) > 0)
+    .sort((a, b) => estimatedOneRepMax(b) - estimatedOneRepMax(a))[0] ?? null;
+}
+
+function estimatedOneRepMax(set) {
+  return Math.round(Number(set.weight) * (1 + Number(set.reps) / 30));
+}
+
+function strengthDelta(points) {
+  if (points.length < 2) return "0";
+  const delta = points.at(-1).estimate - points[0].estimate;
+  return `${delta > 0 ? "+" : ""}${delta}`;
+}
+
+function renderStrengthGraph(points) {
+  if (!points.length) return `<div class="empty">No completed sets for this exercise yet.</div>`;
+  if (points.length === 1) return `<div class="empty">One data point logged. Complete this exercise again to draw a trend.</div>`;
+  const width = 640;
+  const height = 220;
+  const pad = 28;
+  const values = points.map(point => point.estimate);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = Math.max(1, max - min);
+  const coords = points.map((point, index) => {
+    const x = pad + (index / Math.max(1, points.length - 1)) * (width - pad * 2);
+    const y = height - pad - ((point.estimate - min) / span) * (height - pad * 2);
+    return { x, y, point };
+  });
+  const polyline = coords.map(coord => `${coord.x},${coord.y}`).join(" ");
+  return `
+    <svg class="strength-graph" viewBox="0 0 ${width} ${height}" role="img" aria-label="Strength trend graph">
+      <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" />
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" />
+      <polyline points="${polyline}" />
+      ${coords.map(coord => `<circle cx="${coord.x}" cy="${coord.y}" r="5"><title>${coord.point.date}: ${coord.point.estimate}</title></circle>`).join("")}
+      <text x="${pad}" y="${pad - 8}">${max}</text>
+      <text x="${pad}" y="${height - 8}">${min}</text>
+    </svg>
+  `;
+}
+
+function elapsedSeconds(workout) {
+  if (!workout) return 0;
+  if (Number.isFinite(workout.durationSeconds)) return workout.durationSeconds;
+  const end = workout.finishedAt ? new Date(workout.finishedAt) : new Date();
+  const start = new Date(workout.startedAt);
+  return Math.max(0, Math.floor((end - start) / 1000));
+}
+
+function formatWorkoutDuration(workout) {
+  const totalSeconds = elapsedSeconds(workout);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function startTimerRefresh() {
+  clearInterval(timerInterval);
+  if (!state.activeWorkout) return;
+  timerInterval = setInterval(() => {
+    document.querySelectorAll("[data-workout-timer]").forEach(element => {
+      element.textContent = formatWorkoutDuration(state.activeWorkout);
+    });
+  }, 1000);
+}
+
+function hydrateState(rawState) {
+  const normalized = {
+    templates: Array.isArray(rawState.templates) ? rawState.templates : [],
+    activeWorkout: rawState.activeWorkout ?? null,
+    sessions: Array.isArray(rawState.sessions) ? rawState.sessions : []
+  };
+  normalized.templates = normalized.templates.filter(template => !isSeedTemplate(template)).map(hydrateWorkoutLike);
+  normalized.sessions = normalized.sessions.map(hydrateWorkoutLike);
+  if (normalized.activeWorkout) normalized.activeWorkout = hydrateWorkoutLike(normalized.activeWorkout);
+  return normalized;
+}
+
+function hydrateWorkoutLike(workout) {
+  return {
+    ...workout,
+    exercises: Array.isArray(workout.exercises)
+      ? workout.exercises.map(exercise => ({
+          ...exercise,
+          sets: Array.isArray(exercise.sets)
+            ? exercise.sets.map(set => ({
+                ...set,
+                id: set.id ?? uuid(),
+                weight: clampOptionalNumber(set.weight ?? "", 2000),
+                reps: clampOptionalNumber(set.reps ?? "", 100),
+                rir: clampOptionalNumber(set.rir ?? "", 10)
+              }))
+            : []
+        }))
+      : []
+  };
+}
+
+function sessionsByMostRecentDay() {
+  const groups = new Map();
+  for (const session of state.sessions) {
+    const key = dateKey(new Date(session.finishedAt ?? session.startedAt));
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(session);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([key, sessions]) => ({ key, sessions }));
+}
+
+function sessionsForDate(key) {
+  return state.sessions.filter(session => dateKey(new Date(session.finishedAt ?? session.startedAt)) === key);
+}
+
+function adviceSession() {
+  return state.sessions.find(session => session.id === selectedAdviceSessionId) ?? sessionsForDate(selectedCalendarDate)[0] ?? state.sessions[0] ?? null;
+}
+
+function buildAdvice(session) {
+  const recent = sessionsInLastDays(14);
+  const frequency = new Set(recent.map(item => dateKey(new Date(item.finishedAt ?? item.startedAt)))).size;
+  const totalSets = countSets(session.exercises);
+  const avgRir = Number(averageRir(session.exercises));
+  const duration = elapsedSeconds(session);
+  const muscleSummary = summarizeMuscleSets(session.exercises);
+  const weeklyMuscles = summarizeMuscleSets(recent.flatMap(item => item.exercises));
+  const cards = [];
+
+  if (frequency <= 1) {
+    cards.push({
+      label: "Frequency",
+      title: "Add another training day",
+      body: "One day in the last two weeks is too sparse for fast progress. Aim for 2-4 training days weekly, spreading hard sets so each target muscle gets hit at least twice when possible."
+    });
+  } else if (frequency >= 8) {
+    cards.push({
+      label: "Frequency",
+      title: "Watch recovery pressure",
+      body: "You are training often. Keep hard sets recoverable, rotate emphasis, and use easier days before performance drops across multiple sessions."
+    });
+  } else {
+    cards.push({
+      label: "Frequency",
+      title: "Frequency looks usable",
+      body: "Your recent training frequency can support growth if weekly muscle volume is high enough and loads or reps trend upward."
+    });
+  }
+
+  if (totalSets < 8) {
+    cards.push({
+      label: "Volume",
+      title: "This workout is low volume",
+      body: "For hypertrophy, add sets over time if performance is stable and technique stays consistent. A practical target is roughly 10-20 hard weekly sets per priority muscle, adjusted by load/reps trends and repeated performance drop-off, not DOMS."
+    });
+  } else if (totalSets > 24) {
+    cards.push({
+      label: "Volume",
+      title: "This may be too much in one session",
+      body: "Large single-session volume can become junk volume. Split the work across more days or trim low-quality sets if reps or load fall sharply."
+    });
+  } else {
+    cards.push({
+      label: "Volume",
+      title: "Volume is in a productive range",
+      body: "Keep this amount if performance is climbing. Add only 1-2 sets for a lagging muscle after two steady weeks without progress."
+    });
+  }
+
+  if (avgRir >= 4) {
+    cards.push({
+      label: "Effort",
+      title: "Push sets closer to failure",
+      body: "Average RIR is high. Most growth-focused work should land around 0-3 RIR, with compounds often safer at 1-3 RIR and isolations occasionally closer."
+    });
+  } else if (avgRir <= 0.5 && totalSets > 12) {
+    cards.push({
+      label: "Effort",
+      title: "Reduce all-out fatigue",
+      body: "A lot of failure work can raise fatigue without clearly beating near-failure work. Keep some sets at 1-2 RIR so progression survives the next session."
+    });
+  } else {
+    cards.push({
+      label: "Effort",
+      title: "Effort is close enough",
+      body: "Your RIR is near the useful zone. Progress load or reps when you repeat the workout and the target RIR still holds."
+    });
+  }
+
+  if (duration > 5400) {
+    cards.push({
+      label: "Session length",
+      title: "Consider splitting the workout",
+      body: "Past about 90 minutes, fatigue and focus often become limiting. Move lower-priority exercises to another day if later sets are lower quality."
+    });
+  } else if (duration < 1800 && totalSets >= 12) {
+    cards.push({
+      label: "Rest",
+      title: "Rest may be too rushed",
+      body: "If this was a hard session under 30 minutes, make sure heavy compound sets get enough rest to preserve performance."
+    });
+  }
+
+  const underdosed = weeklyMuscles.filter(item => item.sets > 0 && item.sets < 6).slice(0, 3);
+  const dominant = weeklyMuscles[0];
+  if (underdosed.length) {
+    cards.push({
+      label: "Balance",
+      title: `Bring up ${underdosed.map(item => item.muscle).join(", ")}`,
+      body: "These muscles have low recent direct volume. Add a small amount of targeted work before adding more to already-dominant areas."
+    });
+  } else if (dominant) {
+    cards.push({
+      label: "Balance",
+      title: `${dominant.muscle} is your current emphasis`,
+      body: "That is fine if intentional. To avoid plateaus, keep other major movement patterns present with enough sets to maintain progress."
+    });
+  }
+
+  cards.push({
+    label: "Progression",
+    title: "Use a double-progression rule",
+    body: "Keep the same weight until all sets reach the top of your rep target at the planned RIR, then raise weight slightly and rebuild reps."
+  });
+
+  return {
+    overview: adviceOverview(frequency, totalSets, avgRir),
+    frequency,
+    totalSets,
+    averageRir: Number.isFinite(avgRir) ? avgRir.toFixed(1) : "0",
+    muscleSummary,
+    cards
+  };
+}
+
+function adviceOverview(frequency, totalSets, avgRir) {
+  if (frequency <= 1) return "Biggest lever: train more consistently before chasing advanced tweaks.";
+  if (totalSets > 24) return "Biggest lever: improve set quality by spreading or trimming volume.";
+  if (avgRir >= 4) return "Biggest lever: make working sets harder while preserving technique.";
+  return "Biggest lever: repeat this structure and progress reps or load deliberately.";
+}
+
+function sessionsInLastDays(days) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  return state.sessions.filter(session => new Date(session.finishedAt ?? session.startedAt) >= cutoff);
+}
+
+function summarizeMuscleSets(exercises) {
+  const totals = new Map();
+  for (const exercise of exercises) {
+    const bias = muscleBiasForExercise(exercise.name);
+    if (!bias) continue;
+    for (const muscle of bias.muscles) {
+      totals.set(muscle, (totals.get(muscle) ?? 0) + exercise.sets.length);
+    }
+  }
+  return [...totals.entries()]
+    .map(([muscle, sets]) => ({ muscle, sets }))
+    .sort((a, b) => b.sets - a.sets);
+}
+
+function sessionDateKey(sessionId) {
+  const session = state.sessions.find(item => item.id === sessionId);
+  return session ? dateKey(new Date(session.finishedAt ?? session.startedAt)) : null;
+}
+
+function dateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function calendarCells(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const first = new Date(year, month - 1, 1);
+  const start = new Date(first);
+  start.setDate(first.getDate() - first.getDay());
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return {
+      key: dateKey(date),
+      inMonth: date.getMonth() === month - 1
+    };
+  });
+}
+
+function shiftCalendarMonth(delta) {
+  const [year, month] = visibleCalendarMonth.split("-").map(Number);
+  const next = new Date(year, month - 1 + delta, 1);
+  visibleCalendarMonth = dateKey(next).slice(0, 7);
+  selectedCalendarDate = dateKey(next);
+  render();
+}
+
+function formatMonthTitle(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(new Date(year, month - 1, 1));
+}
+
+function formatCalendarHeading(key) {
+  return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(new Date(`${key}T12:00:00`));
+}
+
+function renderMuscleBias(exerciseName) {
+  const bias = muscleBiasForExercise(exerciseName);
+  if (!bias) {
+    return `
+      <div class="bias-card">
+        <span class="bias-label">Muscle bias</span>
+        <p>Name the exercise more specifically to see likely biased muscles.</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="bias-card">
+      <span class="bias-label">Muscle bias</span>
+      <div class="bias-tags">
+        ${bias.muscles.map(muscle => `<span>${escapeHtml(muscle)}</span>`).join("")}
+      </div>
+      <p>${escapeHtml(bias.note)}</p>
+    </div>
+  `;
+}
+
+function muscleBiasForExercise(exerciseName) {
+  const normalized = exerciseName.toLowerCase();
+  return exerciseBiasRules.find(rule => rule.matches.some(match => normalized.includes(match)));
+}
+
+function isSeedTemplate(template) {
+  return (
+    (template.name === "Upper Strength" && template.notes === "Pressing and pulling.") ||
+    (template.name === "Lower Hypertrophy" && template.notes === "Controlled reps.")
+  );
+}
+
+function saveAndRender(message) {
+  saveState();
+  render();
+  showToast(message);
+}
+
+function showToast(message) {
+  clearTimeout(toastTimer);
+  document.querySelector(".toast")?.remove();
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = message;
+  document.body.append(toast);
+  toastTimer = setTimeout(() => toast.remove(), 1800);
+}
+
+async function initCloud() {
+  if (!hasCloudConfig) return;
+  if (!window.supabase?.createClient) {
+    cloudStatus = "Cloud library unavailable";
+    render();
+    return;
+  }
+
+  cloudClient = window.supabase.createClient(cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey);
+  const { data } = await cloudClient.auth.getSession();
+  cloudUser = data.session?.user ?? null;
+  cloudStatus = cloudUser ? "Cloud connected" : "Sign in to sync";
+  if (cloudUser) await pullCloudState();
+  render();
+
+  cloudClient.auth.onAuthStateChange(async (_event, session) => {
+    cloudUser = session?.user ?? null;
+    cloudStatus = cloudUser ? "Cloud connected" : "Sign in to sync";
+    if (cloudUser) await pullCloudState();
+    render();
+  });
+}
+
+async function signIn() {
+  if (!cloudClient) return showToast("Cloud is not configured yet");
+  if (!cloudEmail.trim() || cloudPassword.length < 6) return showToast("Enter email and password");
+  cloudStatus = "Signing in...";
+  render();
+  const { error } = await cloudClient.auth.signInWithPassword({
+    email: cloudEmail.trim(),
+    password: cloudPassword
+  });
+  cloudPassword = "";
+  if (error) {
+    cloudStatus = "Sign in failed";
+    render();
+    return showToast(error.message);
+  }
+  showToast("Signed in");
+}
+
+async function signUp() {
+  if (!cloudClient) return showToast("Cloud is not configured yet");
+  if (!cloudEmail.trim() || cloudPassword.length < 6) return showToast("Use a password with 6+ characters");
+  cloudStatus = "Creating account...";
+  render();
+  const { error } = await cloudClient.auth.signUp({
+    email: cloudEmail.trim(),
+    password: cloudPassword
+  });
+  cloudPassword = "";
+  if (error) {
+    cloudStatus = "Create account failed";
+    render();
+    return showToast(error.message);
+  }
+  cloudStatus = "Check email or sign in";
+  render();
+  showToast("Account created");
+}
+
+async function signOut() {
+  if (!cloudClient) return;
+  await cloudClient.auth.signOut();
+  cloudUser = null;
+  cloudStatus = "Signed out";
+  render();
+}
+
+function scheduleCloudSync() {
+  if (!cloudClient || !cloudUser || demoMode || cloudSyncing) return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(() => {
+    void pushCloudState(false);
+  }, 700);
+}
+
+async function pullCloudState() {
+  if (!cloudClient || !cloudUser || demoMode) return;
+  cloudStatus = "Loading cloud data...";
+  const { data, error } = await cloudClient
+    .from("workout_data")
+    .select("data")
+    .eq("user_id", cloudUser.id)
+    .maybeSingle();
+
+  if (error) {
+    cloudStatus = "Cloud load failed";
+    showToast(error.message);
+    return;
+  }
+
+  if (data?.data) {
+    state = hydrateState(data.data);
+    localStorage.setItem(storageKey, JSON.stringify(state));
+    refreshSelectionsAfterStateLoad();
+    cloudStatus = "Synced";
+    return;
+  }
+
+  await pushCloudState(false);
+}
+
+async function pushCloudState(manual) {
+  if (!cloudClient || !cloudUser || demoMode) return;
+  if (cloudSyncing) return;
+  cloudSyncing = true;
+  cloudStatus = "Syncing...";
+  if (manual) render();
+  const { error } = await cloudClient
+    .from("workout_data")
+    .upsert({
+      user_id: cloudUser.id,
+      data: state,
+      updated_at: new Date().toISOString()
+    });
+  cloudSyncing = false;
+  cloudStatus = error ? "Sync failed" : "Synced";
+  if (error) showToast(error.message);
+  if (manual) {
+    render();
+    if (!error) showToast("Cloud synced");
+  }
+}
+
+function refreshSelectionsAfterStateLoad() {
+  selectedTemplateId = state.templates.find(template => template.id === selectedTemplateId)?.id ?? state.templates[0]?.id ?? null;
+  selectedAdviceSessionId = state.sessions.find(session => session.id === selectedAdviceSessionId)?.id ?? state.sessions[0]?.id ?? null;
+  selectedStrengthExercise = trackedExerciseNames().find(name => normalizeExerciseName(name) === normalizeExerciseName(selectedStrengthExercise)) ?? firstTrackedExerciseName();
+}
+
+function scheduleBiasRender() {
+  clearTimeout(biasRenderTimer);
+  biasRenderTimer = setTimeout(() => render(), 700);
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function uuid() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+function deepClone(value) {
+  if (globalThis.structuredClone) return globalThis.structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function icon(name) {
+  return `<span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="${icons[name]}"></path></svg></span>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll("\n", " ");
+}
+
+render();
+void initCloud();
+
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+}

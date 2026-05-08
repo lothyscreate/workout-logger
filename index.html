@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#09090b">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <title>Workout Logger</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="./cloud-config.js"></script>
+  </head>
+  <body>
+    <div id="app" class="app-shell"></div>
+    <template id="icon-template">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path fill="currentColor"></path>
+      </svg>
+    </template>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

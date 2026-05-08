@@ -1,4 +1,4 @@
-const cacheName = "workout-logger-v9";
+const cacheName = "workout-logger-v10";
 const assets = [
   "./",
   "./index.html",

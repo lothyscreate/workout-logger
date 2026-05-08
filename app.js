@@ -121,6 +121,16 @@ const exerciseBiasRules = [
     note: "Hip-extension patterns with a bent knee usually bias glutes strongly."
   },
   {
+    matches: ["hip adduction", "adductor", "adduction machine", "copenhagen"],
+    muscles: ["Adductors"],
+    note: "Hip-adduction work biases the adductor group on the inner thigh, especially when the thigh moves toward midline under load."
+  },
+  {
+    matches: ["hip abduction", "abductor", "abduction machine"],
+    muscles: ["Glute medius", "glute minimus", "upper glutes"],
+    note: "Hip-abduction work usually biases the glute medius/minimus and upper-glute region."
+  },
+  {
     matches: ["deadlift", "romanian deadlift", "rdl", "good morning"],
     muscles: ["Hamstrings", "glutes", "spinal erectors"],
     note: "Hip-hinge patterns bias posterior chain muscles."
@@ -149,6 +159,21 @@ const exerciseBiasRules = [
     matches: ["calf raise"],
     muscles: ["Calves"],
     note: "Plantar-flexion work biases the calf complex."
+  },
+  {
+    matches: ["ab crunch", "crunch", "cable crunch", "machine crunch", "sit up", "sit-up"],
+    muscles: ["Rectus abdominis"],
+    note: "Spinal-flexion ab work biases the rectus abdominis, especially when the ribs move toward the pelvis against resistance."
+  },
+  {
+    matches: ["leg raise", "hanging knee raise", "knee raise", "reverse crunch"],
+    muscles: ["Abs", "hip flexors"],
+    note: "Posterior pelvic tilt and reverse-crunch patterns bias abs; straight-leg raise variations also involve hip flexors strongly."
+  },
+  {
+    matches: ["plank", "dead bug", "pallof"],
+    muscles: ["Abs", "obliques", "deep core"],
+    note: "Anti-extension and anti-rotation core work biases trunk stiffness rather than loaded spinal flexion."
   }
 ];
 
@@ -219,6 +244,7 @@ function loadState() {
 }
 
 function saveState() {
+  state.updatedAt = new Date().toISOString();
   localStorage.setItem(storageKey, JSON.stringify(state));
   scheduleCloudSync();
 }
@@ -661,27 +687,52 @@ function renderSessionDetail(session) {
 }
 
 function renderReadOnlyExercise(exercise) {
+  const unilateral = isUnilateralExercise(exercise);
   return `
     <section class="exercise-card">
       <div class="exercise-head">
         <div>
           <strong>${escapeHtml(exercise.name)}</strong>
+          <div class="meta">${unilateral ? "Unilateral" : "Bilateral"}</div>
           ${exercise.notes ? `<div class="note-preview">${escapeHtml(exercise.notes)}</div>` : ""}
           ${renderMuscleBias(exercise.name)}
         </div>
       </div>
       <div class="sets">
-        ${exercise.sets.map((set, index) => `
-          <div class="set-row">
-            <div class="set-number">#${index + 1}</div>
-            <div class="stat"><strong>${displaySetValue(set.weight)}</strong><span>Weight</span></div>
-            <div class="stat"><strong>${displaySetValue(set.reps)}</strong><span>Reps</span></div>
-            <div class="stat"><strong>${displaySetValue(set.rir)}</strong><span>RIR</span></div>
-            <div></div>
-          </div>
-        `).join("")}
+        ${exercise.sets.map((set, index) => renderReadOnlySet(set, index, unilateral)).join("")}
       </div>
     </section>
+  `;
+}
+
+function renderReadOnlySet(set, index, unilateral) {
+  if (!unilateral) {
+    return `
+      <div class="set-row">
+        <div class="set-number">#${index + 1}</div>
+        <div class="stat"><strong>${displaySetValue(set.weight)}</strong><span>Weight</span></div>
+        <div class="stat"><strong>${displaySetValue(set.reps)}</strong><span>Reps</span></div>
+        <div class="stat"><strong>${displaySetValue(set.rir)}</strong><span>RIR</span></div>
+        <div></div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="unilateral-set">
+      <div class="set-number">#${index + 1}</div>
+      ${["left", "right"].map(side => {
+        const entry = sideSet(set, side);
+        return `
+          <div class="side-readout">
+            <span class="side-label">${side}</span>
+            <div class="stat"><strong>${displaySetValue(entry.weight)}</strong><span>Weight</span></div>
+            <div class="stat"><strong>${displaySetValue(entry.reps)}</strong><span>Reps</span></div>
+            <div class="stat"><strong>${displaySetValue(entry.rir)}</strong><span>RIR</span></div>
+          </div>
+        `;
+      }).join("")}
+    </div>
   `;
 }
 
@@ -691,6 +742,7 @@ function renderTemplateExercisePreview(exercise) {
       <div class="exercise-head">
         <div>
           <strong>${escapeHtml(exercise.name)}</strong>
+          <div class="meta">${isUnilateralExercise(exercise) ? "Unilateral" : "Bilateral"}</div>
           ${exercise.notes ? `<div class="note-preview">${escapeHtml(exercise.notes)}</div>` : ""}
           ${renderMuscleBias(exercise.name)}
         </div>
@@ -709,6 +761,7 @@ function renderEditableExercise(exercise, index, scope) {
         </div>
         <button class="icon-button" title="Remove exercise" data-action="remove-exercise" data-scope="${scope}" data-exercise-index="${index}">${icon("trash")}</button>
       </div>
+      ${renderTrackingToggle(exercise, index, scope)}
       ${renderMuscleBias(exercise.name)}
       <div class="sets">
         ${exercise.sets.map((set, setIndex) => renderSetRow(set, index, setIndex, scope)).join("")}
@@ -734,6 +787,7 @@ function renderTemplateExerciseEditor(exercise, index) {
         </div>
         <button class="icon-button" title="Remove exercise" data-action="remove-exercise" data-scope="template" data-exercise-index="${index}">${icon("trash")}</button>
       </div>
+      ${renderTrackingToggle(exercise, index, "template")}
       ${renderMuscleBias(exercise.name)}
       <div class="field" style="margin-top:12px">
         <label>Preset notes</label>
@@ -743,8 +797,20 @@ function renderTemplateExerciseEditor(exercise, index) {
   `;
 }
 
+function renderTrackingToggle(exercise, index, scope) {
+  const unilateral = isUnilateralExercise(exercise);
+  return `
+    <div class="segmented" aria-label="Tracking mode">
+      <button class="${unilateral ? "" : "active"}" data-action="set-tracking-mode" data-scope="${scope}" data-exercise-index="${index}" data-mode="bilateral">Bilateral</button>
+      <button class="${unilateral ? "active" : ""}" data-action="set-tracking-mode" data-scope="${scope}" data-exercise-index="${index}" data-mode="unilateral">Unilateral</button>
+    </div>
+  `;
+}
+
 function renderSetRow(set, exerciseIndex, setIndex, scope) {
   const exerciseName = exerciseNameForSet(scope, exerciseIndex);
+  const exercise = exerciseForSet(scope, exerciseIndex);
+  if (isUnilateralExercise(exercise)) return renderUnilateralSetRow(set, exerciseIndex, setIndex, scope, exerciseName);
   const previous = previousSetForExercise(exerciseName, setIndex);
   return `
     <div class="set-row">
@@ -762,6 +828,40 @@ function renderSetRow(set, exerciseIndex, setIndex, scope) {
         <input type="number" min="0" max="10" value="${set.rir ?? ""}" placeholder="${previousPlaceholder(previous, "rir")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.rir">
       </div>
       <button class="icon-button" title="Remove set" data-action="remove-set" data-scope="${scope}" data-exercise-index="${exerciseIndex}" data-set-index="${setIndex}">${icon("x")}</button>
+    </div>
+  `;
+}
+
+function renderUnilateralSetRow(set, exerciseIndex, setIndex, scope, exerciseName) {
+  return `
+    <div class="unilateral-set">
+      <div class="unilateral-set-head">
+        <div class="set-number">#${setIndex + 1}</div>
+        <button class="icon-button" title="Remove set" data-action="remove-set" data-scope="${scope}" data-exercise-index="${exerciseIndex}" data-set-index="${setIndex}">${icon("x")}</button>
+      </div>
+      ${["left", "right"].map(side => renderSideSetFields(set, exerciseIndex, setIndex, scope, exerciseName, side)).join("")}
+    </div>
+  `;
+}
+
+function renderSideSetFields(set, exerciseIndex, setIndex, scope, exerciseName, side) {
+  const entry = sideSet(set, side);
+  const previous = previousSetForExercise(exerciseName, setIndex, side);
+  return `
+    <div class="side-set">
+      <span class="side-label">${side}</span>
+      <div class="field">
+        <label>Weight</label>
+        <input type="number" min="0" max="2000" value="${entry.weight ?? ""}" placeholder="${previousPlaceholder(previous, "weight")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.weight">
+      </div>
+      <div class="field">
+        <label>Reps</label>
+        <input type="number" min="0" max="100" value="${entry.reps ?? ""}" placeholder="${previousPlaceholder(previous, "reps")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.reps">
+      </div>
+      <div class="field">
+        <label>RIR</label>
+        <input type="number" min="0" max="10" value="${entry.rir ?? ""}" placeholder="${previousPlaceholder(previous, "rir")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.rir">
+      </div>
     </div>
   `;
 }
@@ -945,6 +1045,9 @@ async function handleAction(action, element) {
     case "sync-now":
       await pushCloudState(true);
       break;
+    case "set-tracking-mode":
+      setTrackingMode(element.dataset.scope, Number(element.dataset.exerciseIndex), element.dataset.mode);
+      break;
   }
 }
 
@@ -965,7 +1068,13 @@ function updateBinding(binding, value) {
     }
     if (parts[1] === "set") {
       const set = state.activeWorkout.exercises[Number(parts[2])].sets[Number(parts[3])];
-      set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+      if (parts.length === 6) {
+        const side = parts[4];
+        set[side] = sideSet(set, side);
+        set[side][parts[5]] = clampOptionalNumber(value, maxForSetField(parts[5]));
+      } else {
+        set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+      }
     }
     saveState();
   }
@@ -979,7 +1088,13 @@ function updateBinding(binding, value) {
     }
     if (parts[1] === "set") {
       const set = editingTemplate.exercises[Number(parts[2])].sets[Number(parts[3])];
-      set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+      if (parts.length === 6) {
+        const side = parts[4];
+        set[side] = sideSet(set, side);
+        set[side][parts[5]] = clampOptionalNumber(value, maxForSetField(parts[5]));
+      } else {
+        set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+      }
     }
   }
 }
@@ -1056,6 +1171,7 @@ function saveTemplate() {
         id: exercise.id ?? uuid(),
         name: exercise.name.trim(),
         notes: exercise.notes.trim(),
+        trackingMode: isUnilateralExercise(exercise) ? "unilateral" : "bilateral",
         sets: []
       }))
       .filter(exercise => exercise.name)
@@ -1079,12 +1195,22 @@ function removeExercise(scope, exerciseIndex) {
   render();
 }
 
+function setTrackingMode(scope, exerciseIndex, mode) {
+  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  if (!target) return;
+  const exercise = target.exercises[exerciseIndex];
+  if (!exercise) return;
+  exercise.trackingMode = mode === "unilateral" ? "unilateral" : "bilateral";
+  exercise.sets = (exercise.sets ?? []).map(set => hydrateSet(set, exercise.trackingMode));
+  if (scope === "active") saveState();
+  render();
+}
+
 function addSet(scope, exerciseIndex) {
   const target = scope === "template" ? editingTemplate : state.activeWorkout;
   if (!target) return;
   const sets = target.exercises[exerciseIndex].sets;
-  const previous = sets.at(-1) ?? { weight: 0, reps: 8, rir: 2 };
-  sets.push(newSet(previous.weight ?? 0, previous.reps, previous.rir));
+  sets.push(newSet());
   if (scope === "active") saveState();
   render();
 }
@@ -1114,6 +1240,7 @@ function workoutFromTemplate(template, title = template.name) {
       id: uuid(),
       name: exercise.name,
       notes: exercise.notes,
+      trackingMode: isUnilateralExercise(exercise) ? "unilateral" : "bilateral",
       sets: [newSet()]
     }))
   );
@@ -1133,6 +1260,7 @@ function newTemplateExercise(name) {
     id: uuid(),
     name,
     notes: "",
+    trackingMode: "bilateral",
     sets: []
   };
 }
@@ -1142,6 +1270,7 @@ function newExercise(name) {
     id: uuid(),
     name,
     notes: "",
+    trackingMode: "bilateral",
     sets: [newSet()]
   };
 }
@@ -1151,8 +1280,14 @@ function newSet(weight = "", reps = "", rir = "") {
     id: uuid(),
     weight,
     reps,
-    rir
+    rir,
+    left: newSideSet(),
+    right: newSideSet()
   };
+}
+
+function newSideSet(weight = "", reps = "", rir = "") {
+  return { weight, reps, rir };
 }
 
 function countSets(exercises) {
@@ -1160,13 +1295,13 @@ function countSets(exercises) {
 }
 
 function averageRir(exercises) {
-  const sets = exercises.flatMap(exercise => exercise.sets ?? []);
-  if (!sets.length) return "0";
-  return (sets.reduce((total, set) => total + Number(set.rir || 0), 0) / sets.length).toFixed(1);
+  const entries = exercises.flatMap(exercise => loggedSetEntries(exercise));
+  if (!entries.length) return "0";
+  return (entries.reduce((total, entry) => total + Number(entry.rir || 0), 0) / entries.length).toFixed(1);
 }
 
 function averageWeight(exercises) {
-  const weightedSets = exercises.flatMap(exercise => exercise.sets ?? []).filter(set => Number(set.weight) > 0);
+  const weightedSets = exercises.flatMap(exercise => loggedSetEntries(exercise)).filter(set => Number(set.weight) > 0);
   if (!weightedSets.length) return "0";
   const average = weightedSets.reduce((total, set) => total + Number(set.weight || 0), 0) / weightedSets.length;
   return String(Math.round(average));
@@ -1194,18 +1329,24 @@ function maxForSetField(field) {
 }
 
 function exerciseNameForSet(scope, exerciseIndex) {
-  const target = scope === "template" ? editingTemplate : state.activeWorkout;
-  return target?.exercises?.[exerciseIndex]?.name ?? "";
+  return exerciseForSet(scope, exerciseIndex)?.name ?? "";
 }
 
-function previousSetForExercise(exerciseName, setIndex) {
+function exerciseForSet(scope, exerciseIndex) {
+  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  return target?.exercises?.[exerciseIndex] ?? null;
+}
+
+function previousSetForExercise(exerciseName, setIndex, side = null) {
   const normalized = normalizeExerciseName(exerciseName);
   if (!normalized) return null;
   const sorted = [...state.sessions].sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
   for (const session of sorted) {
     const exercise = session.exercises.find(item => normalizeExerciseName(item.name) === normalized);
     const set = exercise?.sets?.[setIndex];
-    if (set && hasLoggedSetValue(set)) return set;
+    if (!set) continue;
+    const entry = side ? sideSet(set, side) : set;
+    if (hasLoggedSetValue(entry)) return entry;
   }
   return null;
 }
@@ -1219,6 +1360,25 @@ function hasLoggedSetValue(set) {
   return ["weight", "reps", "rir"].some(field => set[field] !== "" && set[field] != null && Number(set[field]) > 0);
 }
 
+function isUnilateralExercise(exercise) {
+  return exercise?.trackingMode === "unilateral" || exercise?.unilateral === true;
+}
+
+function sideSet(set, side) {
+  const source = set?.[side] ?? {};
+  return {
+    weight: source.weight ?? "",
+    reps: source.reps ?? "",
+    rir: source.rir ?? ""
+  };
+}
+
+function loggedSetEntries(exercise) {
+  if (!exercise) return [];
+  if (!isUnilateralExercise(exercise)) return exercise.sets ?? [];
+  return (exercise.sets ?? []).flatMap(set => [sideSet(set, "left"), sideSet(set, "right")]);
+}
+
 function normalizeExerciseName(name) {
   return String(name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -1228,7 +1388,7 @@ function trackedExerciseNames() {
   for (const session of state.sessions) {
     for (const exercise of session.exercises) {
       const key = normalizeExerciseName(exercise.name);
-      if (key && bestStrengthSet(exercise.sets ?? []) && !names.has(key)) names.set(key, exercise.name);
+      if (key && bestStrengthSet(exercise) && !names.has(key)) names.set(key, exercise.name);
     }
   }
   return [...names.values()].sort((a, b) => a.localeCompare(b));
@@ -1245,7 +1405,7 @@ function strengthPointsForExercise(name) {
     .map(session => {
       const exercise = session.exercises.find(item => normalizeExerciseName(item.name) === normalized);
       if (!exercise) return null;
-      const best = bestStrengthSet(exercise.sets);
+      const best = bestStrengthSet(exercise);
       if (!best) return null;
       return {
         date: dateKey(new Date(session.finishedAt ?? session.startedAt)),
@@ -1259,8 +1419,8 @@ function strengthPointsForExercise(name) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function bestStrengthSet(sets) {
-  return sets
+function bestStrengthSet(exercise) {
+  return loggedSetEntries(exercise)
     .filter(set => Number(set.weight) > 0 && Number(set.reps) > 0)
     .sort((a, b) => estimatedOneRepMax(b) - estimatedOneRepMax(a))[0] ?? null;
 }
@@ -1336,11 +1496,13 @@ function hydrateState(rawState) {
   const normalized = {
     templates: Array.isArray(rawState.templates) ? rawState.templates : [],
     activeWorkout: rawState.activeWorkout ?? null,
-    sessions: Array.isArray(rawState.sessions) ? rawState.sessions : []
+    sessions: Array.isArray(rawState.sessions) ? rawState.sessions : [],
+    updatedAt: rawState.updatedAt ?? null
   };
   normalized.templates = normalized.templates.filter(template => !isSeedTemplate(template)).map(hydrateWorkoutLike);
   normalized.sessions = normalized.sessions.map(hydrateWorkoutLike);
   if (normalized.activeWorkout) normalized.activeWorkout = hydrateWorkoutLike(normalized.activeWorkout);
+  normalized.updatedAt = normalized.updatedAt ?? latestStateTimestamp(normalized);
   return normalized;
 }
 
@@ -1350,17 +1512,39 @@ function hydrateWorkoutLike(workout) {
     exercises: Array.isArray(workout.exercises)
       ? workout.exercises.map(exercise => ({
           ...exercise,
+          trackingMode: isUnilateralExercise(exercise) ? "unilateral" : "bilateral",
           sets: Array.isArray(exercise.sets)
-            ? exercise.sets.map(set => ({
-                ...set,
-                id: set.id ?? uuid(),
-                weight: clampOptionalNumber(set.weight ?? "", 2000),
-                reps: clampOptionalNumber(set.reps ?? "", 100),
-                rir: clampOptionalNumber(set.rir ?? "", 10)
-              }))
+            ? exercise.sets.map(set => hydrateSet(set, isUnilateralExercise(exercise) ? "unilateral" : "bilateral"))
             : []
         }))
       : []
+  };
+}
+
+function hydrateSet(set, trackingMode = "bilateral") {
+  const hydrated = {
+    ...set,
+    id: set.id ?? uuid(),
+    weight: clampOptionalNumber(set.weight ?? "", 2000),
+    reps: clampOptionalNumber(set.reps ?? "", 100),
+    rir: clampOptionalNumber(set.rir ?? "", 10),
+    left: hydrateSideSet(set.left),
+    right: hydrateSideSet(set.right)
+  };
+
+  if (trackingMode === "unilateral" && !set.left && !set.right && hasLoggedSetValue(set)) {
+    hydrated.left = hydrateSideSet(set);
+    hydrated.right = hydrateSideSet(set);
+  }
+
+  return hydrated;
+}
+
+function hydrateSideSet(set = {}) {
+  return {
+    weight: clampOptionalNumber(set.weight ?? "", 2000),
+    reps: clampOptionalNumber(set.reps ?? "", 100),
+    rir: clampOptionalNumber(set.rir ?? "", 10)
   };
 }
 
@@ -1530,6 +1714,60 @@ function summarizeMuscleSets(exercises) {
 function sessionDateKey(sessionId) {
   const session = state.sessions.find(item => item.id === sessionId);
   return session ? dateKey(new Date(session.finishedAt ?? session.startedAt)) : null;
+}
+
+function latestStateTimestamp(value) {
+  const candidates = [value?.updatedAt];
+  for (const session of value?.sessions ?? []) {
+    candidates.push(session.finishedAt, session.startedAt);
+  }
+  if (value?.activeWorkout) candidates.push(value.activeWorkout.startedAt);
+  const latest = candidates
+    .map(item => (item ? new Date(item).getTime() : 0))
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0];
+  return latest ? new Date(latest).toISOString() : new Date(0).toISOString();
+}
+
+function stateHasUserData(value) {
+  return Boolean(
+    value?.activeWorkout ||
+    (value?.sessions ?? []).length ||
+    (value?.templates ?? []).length
+  );
+}
+
+function mergeCloudStates(localValue, remoteValue) {
+  const local = hydrateState(localValue ?? {});
+  const remote = hydrateState(remoteValue ?? {});
+  return {
+    templates: mergeById(local.templates, remote.templates),
+    sessions: mergeById(local.sessions, remote.sessions).sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt)),
+    activeWorkout: newestWorkout(local.activeWorkout, remote.activeWorkout),
+    updatedAt: [latestStateTimestamp(local), latestStateTimestamp(remote)].sort().at(-1)
+  };
+}
+
+function mergeById(left = [], right = []) {
+  const items = new Map();
+  for (const item of [...right, ...left]) {
+    if (!item?.id) continue;
+    const existing = items.get(item.id);
+    if (!existing || latestStateTimestamp({ sessions: [item], templates: [item] }) >= latestStateTimestamp({ sessions: [existing], templates: [existing] })) {
+      items.set(item.id, item);
+    }
+  }
+  return [...items.values()];
+}
+
+function newestWorkout(left, right) {
+  if (!left) return right ?? null;
+  if (!right) return left;
+  return latestStateTimestamp({ activeWorkout: left }) >= latestStateTimestamp({ activeWorkout: right }) ? left : right;
+}
+
+function statesEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function dateKey(date) {
@@ -1703,7 +1941,7 @@ async function pullCloudState() {
   cloudStatus = "Loading cloud data...";
   const { data, error } = await cloudClient
     .from("workout_data")
-    .select("data")
+    .select("data, updated_at")
     .eq("user_id", cloudUser.id)
     .maybeSingle();
 
@@ -1714,10 +1952,18 @@ async function pullCloudState() {
   }
 
   if (data?.data) {
-    state = hydrateState(data.data);
+    const localState = hydrateState(state);
+    const remoteState = hydrateState({
+      ...data.data,
+      updatedAt: data.updated_at ?? data.data.updatedAt
+    });
+    const merged = mergeCloudStates(localState, remoteState);
+    const shouldPushLocal = stateHasUserData(localState) && (!stateHasUserData(remoteState) || !statesEqual(merged, remoteState));
+    state = merged;
     localStorage.setItem(storageKey, JSON.stringify(state));
     refreshSelectionsAfterStateLoad();
     cloudStatus = "Synced";
+    if (shouldPushLocal) await pushCloudState(false);
     return;
   }
 
@@ -1735,7 +1981,7 @@ async function pushCloudState(manual) {
     .upsert({
       user_id: cloudUser.id,
       data: state,
-      updated_at: new Date().toISOString()
+      updated_at: state.updatedAt ?? new Date().toISOString()
     });
   cloudSyncing = false;
   cloudStatus = error ? "Sync failed" : "Synced";

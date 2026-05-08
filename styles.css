@@ -346,6 +346,31 @@ button.row.selected {
   align-items: center;
 }
 
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.segmented button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.segmented button.active {
+  background: var(--red);
+  color: #ffffff;
+}
+
 .button,
 .icon-button,
 .danger-button,
@@ -484,6 +509,41 @@ textarea:focus {
   min-height: 40px;
   color: var(--muted);
   font-weight: 800;
+}
+
+.unilateral-set {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.unilateral-set-head,
+.side-set,
+.side-readout {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+
+.unilateral-set-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.side-set,
+.side-readout {
+  grid-template-columns: 58px repeat(3, minmax(0, 1fr));
+}
+
+.side-label {
+  align-self: center;
+  color: var(--red);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .bias-card {
@@ -850,6 +910,16 @@ textarea:focus {
   .set-row {
     grid-template-columns: 34px repeat(3, minmax(0, 1fr)) 38px;
     gap: 6px;
+  }
+
+  .side-set,
+  .side-readout {
+    grid-template-columns: 42px repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .side-label {
+    font-size: 0.68rem;
   }
 
   .calendar-cell {

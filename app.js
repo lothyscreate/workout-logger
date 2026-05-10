@@ -224,6 +224,9 @@ let timerInterval = null;
 let biasRenderTimer = null;
 let pointerDragState = null;
 let pointerDragEventsReady = false;
+let serviceWorkerRegistration = null;
+let waitingServiceWorker = null;
+let updateAvailable = false;
 let cloudClient = null;
 let cloudUser = null;
 let cloudEmail = "";
@@ -274,10 +277,21 @@ function render() {
       </main>
     </div>
     ${renderTabs()}
+    ${renderUpdatePrompt()}
     ${editingTemplate ? renderTemplateModal(editingTemplate) : ""}
   `;
   wireEvents();
   startTimerRefresh();
+}
+
+function renderUpdatePrompt() {
+  if (!updateAvailable) return "";
+  return `
+    <div class="update-prompt">
+      <span>Update ready</span>
+      <button class="button" data-action="apply-update">Reload</button>
+    </div>
+  `;
 }
 
 function renderWithScrollRestore() {
@@ -334,6 +348,7 @@ function renderAccountPanel() {
         <span class="account-state">${escapeHtml(cloudUser.email ?? "Signed in")}</span>
         <div class="account-actions">
           <button class="ghost-button" data-action="sync-now">Sync</button>
+          <button class="ghost-button" data-action="check-update">Check update</button>
           <button class="ghost-button" data-action="sign-out">Sign out</button>
         </div>
       </div>
@@ -1132,6 +1147,12 @@ async function handleAction(action, element) {
       break;
     case "set-tracking-mode":
       setTrackingMode(element.dataset.scope, Number(element.dataset.exerciseIndex), element.dataset.mode);
+      break;
+    case "check-update":
+      await checkForAppUpdate(true);
+      break;
+    case "apply-update":
+      applyAppUpdate();
       break;
   }
 }
@@ -1997,6 +2018,55 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.remove(), 1800);
 }
 
+async function initServiceWorker() {
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  serviceWorkerRegistration = await navigator.serviceWorker.register("./service-worker.js");
+  watchServiceWorker(serviceWorkerRegistration);
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    window.location.reload();
+  });
+}
+
+function watchServiceWorker(registration) {
+  if (registration.waiting) {
+    showUpdateAvailable(registration.waiting);
+  }
+
+  registration.addEventListener("updatefound", () => {
+    const installing = registration.installing;
+    if (!installing) return;
+    installing.addEventListener("statechange", () => {
+      if (installing.state === "installed" && navigator.serviceWorker.controller) {
+        showUpdateAvailable(installing);
+      }
+    });
+  });
+}
+
+function showUpdateAvailable(worker) {
+  waitingServiceWorker = worker;
+  updateAvailable = true;
+  renderWithScrollRestore();
+  showToast("Update ready");
+}
+
+async function checkForAppUpdate(manual = false) {
+  if (!serviceWorkerRegistration) {
+    if (manual) showToast("Updates work after install");
+    return;
+  }
+  await serviceWorkerRegistration.update();
+  if (manual && !updateAvailable) showToast("Already up to date");
+}
+
+function applyAppUpdate() {
+  if (!waitingServiceWorker) {
+    window.location.reload();
+    return;
+  }
+  waitingServiceWorker.postMessage({ type: "SKIP_WAITING" });
+}
+
 async function initCloud() {
   if (!hasCloudConfig) return;
   if (!window.supabase?.createClient) {
@@ -2184,7 +2254,4 @@ function escapeAttribute(value) {
 
 render();
 void initCloud();
-
-if ("serviceWorker" in navigator && location.protocol !== "file:") {
-  navigator.serviceWorker.register("./service-worker.js").catch(() => {});
-}
+void initServiceWorker();

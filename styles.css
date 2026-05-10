@@ -819,6 +819,31 @@ textarea:focus {
   font-weight: 800;
 }
 
+.update-prompt {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  z-index: 35;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(18, 18, 24, 0.92);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 850;
+  transform: translateX(-50%);
+  backdrop-filter: blur(18px);
+}
+
+.update-prompt .button {
+  min-height: 34px;
+  padding-inline: 14px;
+}
+
 .hidden {
   display: none !important;
 }
@@ -873,8 +898,12 @@ textarea:focus {
 
   .account-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .account-actions .ghost-button {
+    font-size: 0.78rem;
   }
 
   .button,

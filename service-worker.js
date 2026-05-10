@@ -1,4 +1,4 @@
-const cacheName = "workout-logger-v11";
+const cacheName = "workout-logger-v12";
 const assets = [
   "./",
   "./index.html",
@@ -34,4 +34,10 @@ self.addEventListener("fetch", event => {
       })
       .catch(() => caches.match(event.request))
   );
+});
+
+self.addEventListener("message", event => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });

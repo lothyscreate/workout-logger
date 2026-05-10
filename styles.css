@@ -100,6 +100,20 @@ h1 {
   line-height: 1.1;
 }
 
+.brand-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.version-pill {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .subline {
   margin: 3px 0 0;
   color: var(--muted);
@@ -754,6 +768,17 @@ textarea:focus {
 .session-detail h3 {
   margin: 0;
   font-size: 1rem;
+}
+
+.editing-session {
+  padding: 16px;
+  border: 1px solid rgba(255, 45, 85, 0.18);
+  border-radius: var(--radius);
+  background: rgba(255, 45, 85, 0.045);
+}
+
+.session-edit-grid {
+  grid-template-columns: minmax(180px, 1.3fr) repeat(3, minmax(130px, 1fr));
 }
 
 .empty {

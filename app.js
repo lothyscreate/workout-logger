@@ -2,6 +2,7 @@ const storageKey = "codex.workoutLoggerWeb.v1";
 const backupKey = "codex.workoutLoggerWeb.backups.v1";
 const sessionArchiveKey = "codex.workoutLoggerWeb.sessionArchive.v1";
 const maxStateBackups = 60;
+const appVersion = "v15";
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
 const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
 
@@ -222,6 +223,7 @@ let selectedStrengthExercise = firstTrackedExerciseName();
 if (demoMode === "advice") selectedTab = "advice";
 if (demoMode === "strength") selectedTab = "strength";
 let editingTemplate = null;
+let editingSessionId = null;
 let toastTimer = null;
 let timerInterval = null;
 let biasRenderTimer = null;
@@ -272,7 +274,10 @@ function render() {
       <div class="brand">
         <div class="mark">${icon("bolt")}</div>
         <div>
-          <h1>Workout Logger</h1>
+          <div class="brand-title">
+            <h1>Workout Logger</h1>
+            <span class="version-pill">${appVersion}</span>
+          </div>
           <p class="subline">${state.activeWorkout ? `<span data-workout-timer>${formatWorkoutDuration(state.activeWorkout)}</span> in progress` : cloudStatus}</p>
         </div>
       </div>
@@ -713,11 +718,16 @@ function renderCalendarCell(cell) {
 }
 
 function renderSessionDetail(session) {
+  if (editingSessionId === session.id) return renderSessionEditor(session);
+
   return `
     <article class="session-detail">
       <div class="section-head">
         <h3>${escapeHtml(session.title)}</h3>
-        <button class="danger-button" data-action="delete-session" data-session-id="${session.id}">${icon("trash")} Delete</button>
+        <div class="action-row">
+          <button class="ghost-button" data-action="edit-session" data-session-id="${session.id}">${icon("edit")} Edit</button>
+          <button class="danger-button" data-action="delete-session" data-session-id="${session.id}">${icon("trash")} Delete</button>
+        </div>
       </div>
       <section class="summary-band">
         <div class="field">
@@ -733,6 +743,49 @@ function renderSessionDetail(session) {
       </section>
       <div class="exercise-list">
         ${session.exercises.map(exercise => renderReadOnlyExercise(exercise)).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderSessionEditor(session) {
+  const scope = sessionScope(session.id);
+  return `
+    <article class="session-detail editing-session">
+      <div class="section-head">
+        <h3>Edit ${escapeHtml(session.title || "Workout")}</h3>
+        <div class="action-row">
+          <button class="button" data-action="done-edit-session" data-session-id="${session.id}">${icon("check")} Done</button>
+          <button class="danger-button" data-action="delete-session" data-session-id="${session.id}">${icon("trash")} Delete</button>
+        </div>
+      </div>
+      <section class="summary-band session-edit-grid">
+        <div class="field">
+          <label>Workout</label>
+          <input value="${escapeAttribute(session.title)}" data-bind="${scope}.title">
+        </div>
+        <div class="field">
+          <label>Started</label>
+          <input type="datetime-local" value="${escapeAttribute(toDateTimeLocalValue(session.startedAt))}" data-bind="${scope}.startedAt">
+        </div>
+        <div class="field">
+          <label>Finished</label>
+          <input type="datetime-local" value="${escapeAttribute(toDateTimeLocalValue(session.finishedAt ?? session.startedAt))}" data-bind="${scope}.finishedAt">
+        </div>
+        <div class="field">
+          <label>Duration min</label>
+          <input type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(durationMinutesValue(session))}" data-bind="${scope}.durationMinutes">
+        </div>
+        <div class="field full">
+          <label>Workout notes</label>
+          <textarea data-bind="${scope}.workoutNotes">${escapeHtml(session.workoutNotes)}</textarea>
+        </div>
+      </section>
+      <div class="exercise-list">
+        ${session.exercises.map((exercise, index) => renderEditableExercise(exercise, index, scope)).join("")}
+      </div>
+      <div class="action-row" style="margin-top:14px">
+        <button class="ghost-button" data-action="add-session-exercise" data-scope="${scope}">${icon("plus")} Exercise</button>
       </div>
     </article>
   `;
@@ -980,14 +1033,6 @@ function wireEvents() {
     }
   });
 
-  document.querySelectorAll("[data-session-id]").forEach(element => {
-    element.addEventListener("click", () => {
-      selectedCalendarDate = sessionDateKey(element.dataset.sessionId) ?? selectedCalendarDate;
-      visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
-      render();
-    });
-  });
-
   document.querySelectorAll("[data-calendar-date]").forEach(element => {
     element.addEventListener("click", () => {
       selectedCalendarDate = element.dataset.calendarDate;
@@ -1110,6 +1155,12 @@ async function handleAction(action, element) {
     case "delete-session":
       deleteSession(element.dataset.sessionId);
       break;
+    case "edit-session":
+      editSession(element.dataset.sessionId);
+      break;
+    case "done-edit-session":
+      finishEditingSession(element.dataset.sessionId);
+      break;
     case "previous-month":
       shiftCalendarMonth(-1);
       break;
@@ -1128,6 +1179,9 @@ async function handleAction(action, element) {
     case "add-template-exercise":
       editingTemplate.exercises.push(newTemplateExercise("New Exercise"));
       renderWithScrollRestore();
+      break;
+    case "add-session-exercise":
+      addExerciseToScope(element.dataset.scope);
       break;
     case "remove-exercise":
       removeExercise(element.dataset.scope, Number(element.dataset.exerciseIndex));
@@ -1177,24 +1231,11 @@ function updateBinding(binding, value) {
     return;
   }
 
-  if (parts[0] === "active" && state.activeWorkout) {
-    if (parts[1] === "title") state.activeWorkout.title = value.trimStart() || "Workout";
-    if (parts[1] === "workoutNotes") state.activeWorkout.workoutNotes = value;
-    if (parts[1] === "exercise") {
-      state.activeWorkout.exercises[Number(parts[2])][parts[3]] = value;
-      if (parts[3] === "name") scheduleBiasRender();
-    }
-    if (parts[1] === "set") {
-      const set = state.activeWorkout.exercises[Number(parts[2])].sets[Number(parts[3])];
-      if (parts.length === 6) {
-        const side = parts[4];
-        set[side] = sideSet(set, side);
-        set[side][parts[5]] = normalizeSetFieldValue(parts[5], value);
-      } else {
-        set[parts[4]] = normalizeSetFieldValue(parts[4], value);
-      }
-    }
-    saveState("active-edit");
+  if (isWorkoutEditScope(parts[0])) {
+    const workout = workoutForScope(parts[0]);
+    if (!workout) return;
+    updateWorkoutBinding(workout, parts, value);
+    persistWorkoutScope(parts[0], "workout-edit");
   }
 
   if (parts[0] === "template" && editingTemplate) {
@@ -1213,6 +1254,37 @@ function updateBinding(binding, value) {
       } else {
         set[parts[4]] = normalizeSetFieldValue(parts[4], value);
       }
+    }
+  }
+}
+
+function updateWorkoutBinding(workout, parts, value) {
+  if (parts[1] === "title") workout.title = value.trimStart() || "Workout";
+  if (parts[1] === "workoutNotes") workout.workoutNotes = value;
+  if (parts[1] === "startedAt") {
+    const startedAt = fromDateTimeLocalValue(value);
+    if (startedAt) workout.startedAt = startedAt;
+  }
+  if (parts[1] === "finishedAt") {
+    const finishedAt = fromDateTimeLocalValue(value);
+    if (finishedAt) workout.finishedAt = finishedAt;
+  }
+  if (parts[1] === "durationMinutes") workout.durationSeconds = minutesToDurationSeconds(value);
+  if (parts[1] === "exercise") {
+    const exercise = workout.exercises[Number(parts[2])];
+    if (!exercise) return;
+    exercise[parts[3]] = value;
+    if (parts[3] === "name") scheduleBiasRender();
+  }
+  if (parts[1] === "set") {
+    const set = workout.exercises[Number(parts[2])]?.sets?.[Number(parts[3])];
+    if (!set) return;
+    if (parts.length === 6) {
+      const side = parts[4];
+      set[side] = sideSet(set, side);
+      set[side][parts[5]] = normalizeSetFieldValue(parts[5], value);
+    } else {
+      set[parts[4]] = normalizeSetFieldValue(parts[4], value);
     }
   }
 }
@@ -1244,6 +1316,28 @@ function finishWorkout() {
   state.activeWorkout = null;
   selectedTab = "calendar";
   saveAndRender("Workout finished");
+}
+
+function editSession(id) {
+  const session = state.sessions.find(item => item.id === id);
+  if (!session) return;
+  editingSessionId = id;
+  selectedCalendarDate = sessionDateKey(id) ?? selectedCalendarDate;
+  visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
+  selectedTab = "calendar";
+  renderWithScrollRestore();
+}
+
+function finishEditingSession(id) {
+  const session = state.sessions.find(item => item.id === id);
+  if (session) {
+    session.updatedAt = new Date().toISOString();
+    archiveCompletedSession(session);
+    selectedCalendarDate = sessionDateKey(id) ?? selectedCalendarDate;
+    visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
+  }
+  editingSessionId = null;
+  saveAndRender("Workout updated", true);
 }
 
 function editTemplate(id) {
@@ -1281,6 +1375,7 @@ function deleteSession(id) {
   state.deletedSessionIds = [...new Set([...(state.deletedSessionIds ?? []), id])];
   state.sessions = state.sessions.filter(session => session.id !== id);
   selectedAdviceSessionId = state.sessions[0]?.id ?? null;
+  if (editingSessionId === id) editingSessionId = null;
   saveAndRender("Workout deleted");
 }
 
@@ -1312,34 +1407,42 @@ function saveTemplate() {
   saveAndRender("Template saved");
 }
 
+function addExerciseToScope(scope) {
+  const target = workoutForScope(scope);
+  if (!target) return;
+  target.exercises.push(newExercise("New Exercise"));
+  persistWorkoutScope(scope, "add-exercise");
+  renderWithScrollRestore();
+}
+
 function removeExercise(scope, exerciseIndex) {
-  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  const target = workoutForScope(scope);
   if (!target) return;
   target.exercises.splice(exerciseIndex, 1);
-  if (scope === "active") saveState();
+  persistWorkoutScope(scope, "remove-exercise");
   renderWithScrollRestore();
 }
 
 function setTrackingMode(scope, exerciseIndex, mode) {
-  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  const target = workoutForScope(scope);
   if (!target) return;
   const exercise = target.exercises[exerciseIndex];
   if (!exercise) return;
   exercise.trackingMode = mode === "unilateral" ? "unilateral" : "bilateral";
   exercise.sets = (exercise.sets ?? []).map(set => hydrateSet(set, exercise.trackingMode));
-  if (scope === "active") saveState();
+  persistWorkoutScope(scope, "tracking-mode");
   renderWithScrollRestore();
 }
 
 function reorderExercise(scope, fromIndex, toIndex) {
-  if (scope !== "active" && scope !== "template") return;
+  if (!isEditableScope(scope)) return;
   if (fromIndex === toIndex) return;
-  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  const target = workoutForScope(scope);
   if (!target?.exercises) return;
   if (fromIndex < 0 || toIndex < 0 || fromIndex >= target.exercises.length || toIndex >= target.exercises.length) return;
   const [moved] = target.exercises.splice(fromIndex, 1);
   target.exercises.splice(toIndex, 0, moved);
-  if (scope === "active") saveState();
+  persistWorkoutScope(scope, "reorder-exercise");
   renderWithScrollRestore();
   showToast("Exercise reordered");
 }
@@ -1381,19 +1484,19 @@ function cancelPointerDrag() {
 }
 
 function addSet(scope, exerciseIndex) {
-  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  const target = workoutForScope(scope);
   if (!target) return;
   const sets = target.exercises[exerciseIndex].sets;
   sets.push(newSet());
-  if (scope === "active") saveState();
+  persistWorkoutScope(scope, "add-set");
   renderWithScrollRestore();
 }
 
 function removeSet(scope, exerciseIndex, setIndex) {
-  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  const target = workoutForScope(scope);
   if (!target) return;
   target.exercises[exerciseIndex].sets.splice(setIndex, 1);
-  if (scope === "active") saveState();
+  persistWorkoutScope(scope, "remove-set");
   renderWithScrollRestore();
 }
 
@@ -1510,7 +1613,7 @@ function normalizeSetFieldValue(field, value) {
 
 function normalizeRirValue(value) {
   return String(value ?? "")
-    .replace(/[–—]/g, "-")
+    .replace(/[\u2013\u2014]/g, "-")
     .replace(/\s*-\s*/g, "-")
     .trim()
     .slice(0, 20);
@@ -1534,12 +1637,53 @@ function maxForSetField(field) {
   return 100;
 }
 
+function sessionScope(id) {
+  return `session:${id}`;
+}
+
+function isSessionScope(scope) {
+  return String(scope ?? "").startsWith("session:");
+}
+
+function sessionIdFromScope(scope) {
+  return String(scope ?? "").slice("session:".length);
+}
+
+function isWorkoutEditScope(scope) {
+  return scope === "active" || isSessionScope(scope);
+}
+
+function isEditableScope(scope) {
+  return scope === "template" || isWorkoutEditScope(scope);
+}
+
+function workoutForScope(scope) {
+  if (scope === "template") return editingTemplate;
+  if (scope === "active") return state.activeWorkout;
+  if (isSessionScope(scope)) return state.sessions.find(session => session.id === sessionIdFromScope(scope)) ?? null;
+  return null;
+}
+
+function persistWorkoutScope(scope, reason = "workout-edit") {
+  if (scope === "active") {
+    saveState(reason);
+    return;
+  }
+  if (isSessionScope(scope)) {
+    const session = workoutForScope(scope);
+    if (!session) return;
+    session.updatedAt = new Date().toISOString();
+    archiveCompletedSession(session);
+    saveState(reason);
+  }
+}
+
 function exerciseNameForSet(scope, exerciseIndex) {
   return exerciseForSet(scope, exerciseIndex)?.name ?? "";
 }
 
 function exerciseForSet(scope, exerciseIndex) {
-  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  const target = workoutForScope(scope);
   return target?.exercises?.[exerciseIndex] ?? null;
 }
 
@@ -1686,6 +1830,30 @@ function formatWorkoutDuration(workout) {
     return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function durationMinutesValue(workout) {
+  return String(Math.round(elapsedSeconds(workout) / 60));
+}
+
+function minutesToDurationSeconds(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.round(Math.min(parsed, 1440) * 60);
+}
+
+function toDateTimeLocalValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function fromDateTimeLocalValue(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 function startTimerRefresh() {
@@ -2525,6 +2693,7 @@ function refreshSelectionsAfterStateLoad() {
   selectedTemplateId = state.templates.find(template => template.id === selectedTemplateId)?.id ?? state.templates[0]?.id ?? null;
   selectedAdviceSessionId = state.sessions.find(session => session.id === selectedAdviceSessionId)?.id ?? state.sessions[0]?.id ?? null;
   selectedStrengthExercise = trackedExerciseNames().find(name => normalizeExerciseName(name) === normalizeExerciseName(selectedStrengthExercise)) ?? firstTrackedExerciseName();
+  editingSessionId = state.sessions.find(session => session.id === editingSessionId)?.id ?? null;
 }
 
 function scheduleBiasRender() {

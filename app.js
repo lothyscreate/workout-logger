@@ -1,4 +1,7 @@
 const storageKey = "codex.workoutLoggerWeb.v1";
+const backupKey = "codex.workoutLoggerWeb.backups.v1";
+const sessionArchiveKey = "codex.workoutLoggerWeb.sessionArchive.v1";
+const maxStateBackups = 60;
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
 const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
 
@@ -234,24 +237,31 @@ let cloudPassword = "";
 let cloudStatus = hasCloudConfig ? "Sign in to sync" : "Local only";
 let cloudSyncTimer = null;
 let cloudSyncing = false;
+let cloudSyncPending = false;
 
 function loadState() {
+  const emptyState = {
+    templates: [],
+    activeWorkout: null,
+    sessions: [],
+    deletedSessionIds: []
+  };
   try {
     const saved = localStorage.getItem(storageKey);
-    if (saved) return hydrateState(JSON.parse(saved));
+    if (saved) return recoverStateFromLocalBackups(hydrateState(JSON.parse(saved)));
   } catch {
     localStorage.removeItem(storageKey);
   }
-  return hydrateState({
-    templates: [],
-    activeWorkout: null,
-    sessions: []
-  });
+  return recoverStateFromLocalBackups(hydrateState(emptyState));
 }
 
-function saveState() {
-  state.updatedAt = new Date().toISOString();
+function saveState(reason = "save") {
+  const now = new Date().toISOString();
+  state.updatedAt = now;
+  if (state.activeWorkout) state.activeWorkout.updatedAt = now;
+  state = recoverStateFromLocalBackups(hydrateState(state), { allowActiveRestore: false });
   localStorage.setItem(storageKey, JSON.stringify(state));
+  writeStateBackup(state, reason);
   scheduleCloudSync();
 }
 
@@ -869,15 +879,15 @@ function renderSetRow(set, exerciseIndex, setIndex, scope) {
       <div class="set-number">#${setIndex + 1}</div>
       <div class="field">
         <label>Weight</label>
-        <input type="number" min="0" max="2000" value="${set.weight ?? ""}" placeholder="${previousPlaceholder(previous, "weight")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.weight">
+        <input type="text" inputmode="decimal" autocomplete="off" value="${escapeAttribute(set.weight ?? "")}" placeholder="${previousPlaceholder(previous, "weight")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.weight">
       </div>
       <div class="field">
         <label>Reps</label>
-        <input type="number" min="0" max="100" value="${set.reps ?? ""}" placeholder="${previousPlaceholder(previous, "reps")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.reps">
+        <input type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(set.reps ?? "")}" placeholder="${previousPlaceholder(previous, "reps")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.reps">
       </div>
       <div class="field">
         <label>RIR</label>
-        <input type="number" min="0" max="10" value="${set.rir ?? ""}" placeholder="${previousPlaceholder(previous, "rir")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.rir">
+        <input type="text" inputmode="decimal" autocomplete="off" value="${escapeAttribute(set.rir ?? "")}" placeholder="${previousPlaceholder(previous, "rir")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.rir">
       </div>
       <button class="icon-button" title="Remove set" data-action="remove-set" data-scope="${scope}" data-exercise-index="${exerciseIndex}" data-set-index="${setIndex}">${icon("x")}</button>
     </div>
@@ -904,15 +914,15 @@ function renderSideSetFields(set, exerciseIndex, setIndex, scope, exerciseName, 
       <span class="side-label">${side}</span>
       <div class="field">
         <label>Weight</label>
-        <input type="number" min="0" max="2000" value="${entry.weight ?? ""}" placeholder="${previousPlaceholder(previous, "weight")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.weight">
+        <input type="text" inputmode="decimal" autocomplete="off" value="${escapeAttribute(entry.weight ?? "")}" placeholder="${previousPlaceholder(previous, "weight")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.weight">
       </div>
       <div class="field">
         <label>Reps</label>
-        <input type="number" min="0" max="100" value="${entry.reps ?? ""}" placeholder="${previousPlaceholder(previous, "reps")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.reps">
+        <input type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(entry.reps ?? "")}" placeholder="${previousPlaceholder(previous, "reps")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.reps">
       </div>
       <div class="field">
         <label>RIR</label>
-        <input type="number" min="0" max="10" value="${entry.rir ?? ""}" placeholder="${previousPlaceholder(previous, "rir")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.rir">
+        <input type="text" inputmode="decimal" autocomplete="off" value="${escapeAttribute(entry.rir ?? "")}" placeholder="${previousPlaceholder(previous, "rir")}" data-bind="${scope}.set.${exerciseIndex}.${setIndex}.${side}.rir">
       </div>
     </div>
   `;
@@ -1179,12 +1189,12 @@ function updateBinding(binding, value) {
       if (parts.length === 6) {
         const side = parts[4];
         set[side] = sideSet(set, side);
-        set[side][parts[5]] = clampOptionalNumber(value, maxForSetField(parts[5]));
+        set[side][parts[5]] = normalizeSetFieldValue(parts[5], value);
       } else {
-        set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+        set[parts[4]] = normalizeSetFieldValue(parts[4], value);
       }
     }
-    saveState();
+    saveState("active-edit");
   }
 
   if (parts[0] === "template" && editingTemplate) {
@@ -1199,9 +1209,9 @@ function updateBinding(binding, value) {
       if (parts.length === 6) {
         const side = parts[4];
         set[side] = sideSet(set, side);
-        set[side][parts[5]] = clampOptionalNumber(value, maxForSetField(parts[5]));
+        set[side][parts[5]] = normalizeSetFieldValue(parts[5], value);
       } else {
-        set[parts[4]] = clampOptionalNumber(value, maxForSetField(parts[4]));
+        set[parts[4]] = normalizeSetFieldValue(parts[4], value);
       }
     }
   }
@@ -1217,12 +1227,17 @@ function startTemplate(id) {
 
 function finishWorkout() {
   if (!state.activeWorkout) return;
-  const session = {
-    ...state.activeWorkout,
-    finishedAt: new Date().toISOString(),
-    durationSeconds: elapsedSeconds(state.activeWorkout)
-  };
-  state.sessions.unshift(session);
+  const finishedAt = new Date().toISOString();
+  const session = hydrateWorkoutLike({
+    ...deepClone(state.activeWorkout),
+    finishedAt,
+    durationSeconds: elapsedSeconds(state.activeWorkout),
+    updatedAt: finishedAt
+  });
+  archiveCompletedSession(session);
+  state.sessions = mergeById([session], state.sessions)
+    .filter(item => !state.deletedSessionIds?.includes(item.id))
+    .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
   selectedCalendarDate = sessionDateKey(session.id) ?? dateKey(new Date());
   visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
   selectedAdviceSessionId = session.id;
@@ -1263,6 +1278,7 @@ function deleteTemplate(id) {
 
 function deleteSession(id) {
   if (!confirm("Delete workout from history?")) return;
+  state.deletedSessionIds = [...new Set([...(state.deletedSessionIds ?? []), id])];
   state.sessions = state.sessions.filter(session => session.id !== id);
   selectedAdviceSessionId = state.sessions[0]?.id ?? null;
   saveAndRender("Workout deleted");
@@ -1274,6 +1290,7 @@ function saveTemplate() {
     ...editingTemplate,
     name: editingTemplate.name.trim() || "Workout",
     notes: editingTemplate.notes.trim(),
+    updatedAt: new Date().toISOString(),
     exercises: editingTemplate.exercises
       .map(exercise => ({
         id: exercise.id ?? uuid(),
@@ -1381,10 +1398,12 @@ function removeSet(scope, exerciseIndex, setIndex) {
 }
 
 function newWorkout(title, exercises) {
+  const now = new Date().toISOString();
   return {
     id: uuid(),
     title,
-    startedAt: new Date().toISOString(),
+    startedAt: now,
+    updatedAt: now,
     workoutNotes: "",
     exercises
   };
@@ -1404,9 +1423,11 @@ function workoutFromTemplate(template, title = template.name) {
 }
 
 function newTemplate() {
+  const now = new Date().toISOString();
   return {
     id: uuid(),
     name: "New Workout",
+    updatedAt: now,
     notes: "",
     exercises: [newTemplateExercise("New Exercise")]
   };
@@ -1452,9 +1473,12 @@ function countSets(exercises) {
 }
 
 function averageRir(exercises) {
-  const entries = exercises.flatMap(exercise => loggedSetEntries(exercise));
-  if (!entries.length) return "0";
-  return (entries.reduce((total, entry) => total + Number(entry.rir || 0), 0) / entries.length).toFixed(1);
+  const rirValues = exercises
+    .flatMap(exercise => loggedSetEntries(exercise))
+    .map(entry => rirToNumber(entry.rir))
+    .filter(value => value != null);
+  if (!rirValues.length) return "0";
+  return (rirValues.reduce((total, value) => total + value, 0) / rirValues.length).toFixed(1);
 }
 
 function averageWeight(exercises) {
@@ -1479,8 +1503,33 @@ function clampOptionalNumber(value, max) {
   return clampNumber(value, max);
 }
 
+function normalizeSetFieldValue(field, value) {
+  if (field === "rir") return normalizeRirValue(value);
+  return clampOptionalNumber(value, maxForSetField(field));
+}
+
+function normalizeRirValue(value) {
+  return String(value ?? "")
+    .replace(/[–—]/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .trim()
+    .slice(0, 20);
+}
+
+function rirToNumber(value) {
+  const text = normalizeRirValue(value);
+  if (!text) return null;
+  const matches = text.match(/\d+(?:\.\d+)?/g);
+  if (!matches?.length) return null;
+  const values = matches
+    .map(Number)
+    .filter(Number.isFinite)
+    .map(number => Math.max(0, Math.min(10, number)));
+  if (!values.length) return null;
+  return values.reduce((total, number) => total + number, 0) / values.length;
+}
+
 function maxForSetField(field) {
-  if (field === "rir") return 10;
   if (field === "weight") return 2000;
   return 100;
 }
@@ -1514,7 +1563,7 @@ function previousPlaceholder(previous, field) {
 }
 
 function hasLoggedSetValue(set) {
-  return ["weight", "reps", "rir"].some(field => set[field] !== "" && set[field] != null && Number(set[field]) > 0);
+  return Number(set?.weight) > 0 || Number(set?.reps) > 0 || String(set?.rir ?? "").trim() !== "";
 }
 
 function isUnilateralExercise(exercise) {
@@ -1654,10 +1703,13 @@ function hydrateState(rawState) {
     templates: Array.isArray(rawState.templates) ? rawState.templates : [],
     activeWorkout: rawState.activeWorkout ?? null,
     sessions: Array.isArray(rawState.sessions) ? rawState.sessions : [],
+    deletedSessionIds: Array.isArray(rawState.deletedSessionIds) ? rawState.deletedSessionIds : [],
     updatedAt: rawState.updatedAt ?? null
   };
   normalized.templates = normalized.templates.filter(template => !isSeedTemplate(template)).map(hydrateWorkoutLike);
-  normalized.sessions = normalized.sessions.map(hydrateWorkoutLike);
+  normalized.sessions = mergeById(normalized.sessions.map(hydrateWorkoutLike));
+  normalized.deletedSessionIds = [...new Set(normalized.deletedSessionIds.filter(Boolean))];
+  normalized.sessions = normalized.sessions.filter(session => !normalized.deletedSessionIds.includes(session.id));
   if (normalized.activeWorkout) normalized.activeWorkout = hydrateWorkoutLike(normalized.activeWorkout);
   normalized.updatedAt = normalized.updatedAt ?? latestStateTimestamp(normalized);
   return normalized;
@@ -1666,9 +1718,11 @@ function hydrateState(rawState) {
 function hydrateWorkoutLike(workout) {
   return {
     ...workout,
+    id: workout.id ?? uuid(),
     exercises: Array.isArray(workout.exercises)
       ? workout.exercises.map(exercise => ({
           ...exercise,
+          id: exercise.id ?? uuid(),
           trackingMode: isUnilateralExercise(exercise) ? "unilateral" : "bilateral",
           sets: Array.isArray(exercise.sets)
             ? exercise.sets.map(set => hydrateSet(set, isUnilateralExercise(exercise) ? "unilateral" : "bilateral"))
@@ -1678,13 +1732,13 @@ function hydrateWorkoutLike(workout) {
   };
 }
 
-function hydrateSet(set, trackingMode = "bilateral") {
+function hydrateSet(set = {}, trackingMode = "bilateral") {
   const hydrated = {
     ...set,
     id: set.id ?? uuid(),
-    weight: clampOptionalNumber(set.weight ?? "", 2000),
-    reps: clampOptionalNumber(set.reps ?? "", 100),
-    rir: clampOptionalNumber(set.rir ?? "", 10),
+    weight: normalizeSetFieldValue("weight", set.weight ?? ""),
+    reps: normalizeSetFieldValue("reps", set.reps ?? ""),
+    rir: normalizeSetFieldValue("rir", set.rir ?? ""),
     left: hydrateSideSet(set.left),
     right: hydrateSideSet(set.right)
   };
@@ -1699,9 +1753,9 @@ function hydrateSet(set, trackingMode = "bilateral") {
 
 function hydrateSideSet(set = {}) {
   return {
-    weight: clampOptionalNumber(set.weight ?? "", 2000),
-    reps: clampOptionalNumber(set.reps ?? "", 100),
-    rir: clampOptionalNumber(set.rir ?? "", 10)
+    weight: normalizeSetFieldValue("weight", set.weight ?? ""),
+    reps: normalizeSetFieldValue("reps", set.reps ?? ""),
+    rir: normalizeSetFieldValue("rir", set.rir ?? "")
   };
 }
 
@@ -1876,14 +1930,21 @@ function sessionDateKey(sessionId) {
 function latestStateTimestamp(value) {
   const candidates = [value?.updatedAt];
   for (const session of value?.sessions ?? []) {
-    candidates.push(session.finishedAt, session.startedAt);
+    candidates.push(session.updatedAt, session.finishedAt, session.startedAt);
   }
-  if (value?.activeWorkout) candidates.push(value.activeWorkout.startedAt);
+  for (const template of value?.templates ?? []) {
+    candidates.push(template.updatedAt, template.startedAt);
+  }
+  if (value?.activeWorkout) candidates.push(value.activeWorkout.updatedAt, value.activeWorkout.startedAt);
   const latest = candidates
     .map(item => (item ? new Date(item).getTime() : 0))
     .filter(Number.isFinite)
     .sort((a, b) => b - a)[0];
   return latest ? new Date(latest).toISOString() : new Date(0).toISOString();
+}
+
+function recordTimestamp(record) {
+  return new Date(record?.updatedAt ?? record?.finishedAt ?? record?.startedAt ?? 0).getTime() || 0;
 }
 
 function stateHasUserData(value) {
@@ -1901,17 +1962,19 @@ function mergeCloudStates(localValue, remoteValue) {
     templates: mergeById(local.templates, remote.templates),
     sessions: mergeById(local.sessions, remote.sessions).sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt)),
     activeWorkout: newestWorkout(local.activeWorkout, remote.activeWorkout),
+    deletedSessionIds: [...new Set([...(local.deletedSessionIds ?? []), ...(remote.deletedSessionIds ?? [])])],
     updatedAt: [latestStateTimestamp(local), latestStateTimestamp(remote)].sort().at(-1)
   };
 }
 
-function mergeById(left = [], right = []) {
+function mergeById(...groups) {
   const items = new Map();
-  for (const item of [...right, ...left]) {
-    if (!item?.id) continue;
-    const existing = items.get(item.id);
-    if (!existing || latestStateTimestamp({ sessions: [item], templates: [item] }) >= latestStateTimestamp({ sessions: [existing], templates: [existing] })) {
-      items.set(item.id, item);
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const item of group) {
+      if (!item?.id) continue;
+      const existing = items.get(item.id);
+      items.set(item.id, existing ? mergeWorkoutRecords(existing, item) : item);
     }
   }
   return [...items.values()];
@@ -1920,7 +1983,247 @@ function mergeById(left = [], right = []) {
 function newestWorkout(left, right) {
   if (!left) return right ?? null;
   if (!right) return left;
-  return latestStateTimestamp({ activeWorkout: left }) >= latestStateTimestamp({ activeWorkout: right }) ? left : right;
+  return mergeWorkoutRecords(left, right);
+}
+
+function mergeWorkoutRecords(left, right) {
+  const leftWorkout = hydrateWorkoutLike(left);
+  const rightWorkout = hydrateWorkoutLike(right);
+  const preferred = preferWorkoutRecord(leftWorkout, rightWorkout);
+  const fallback = preferred === leftWorkout ? rightWorkout : leftWorkout;
+  return {
+    ...fallback,
+    ...preferred,
+    workoutNotes: preferred.workoutNotes || fallback.workoutNotes || "",
+    notes: preferred.notes || fallback.notes || "",
+    exercises: mergeExerciseLists(preferred.exercises, fallback.exercises),
+    updatedAt: preferred.updatedAt ?? fallback.updatedAt ?? new Date(Math.max(recordTimestamp(preferred), recordTimestamp(fallback))).toISOString()
+  };
+}
+
+function preferWorkoutRecord(left, right) {
+  const leftScore = workoutDataScore(left);
+  const rightScore = workoutDataScore(right);
+  if (Math.abs(leftScore - rightScore) >= 2) return leftScore >= rightScore ? left : right;
+  return recordTimestamp(left) >= recordTimestamp(right) ? left : right;
+}
+
+function workoutDataScore(workout) {
+  if (!workout) return 0;
+  let score = 0;
+  if (workout.title || workout.name) score += 1;
+  if (workout.workoutNotes) score += 4 + Math.min(10, String(workout.workoutNotes).length / 20);
+  if (workout.notes) score += 2 + Math.min(6, String(workout.notes).length / 30);
+  for (const exercise of workout.exercises ?? []) {
+    score += exerciseDataScore(exercise);
+  }
+  return score;
+}
+
+function mergeExerciseLists(primary = [], secondary = []) {
+  const secondaryByKey = new Map();
+  secondary.forEach((exercise, index) => {
+    secondaryByKey.set(exerciseMergeKey(exercise, index), exercise);
+  });
+  const used = new Set();
+  const merged = primary.map((exercise, index) => {
+    const key = exerciseMergeKey(exercise, index);
+    const fallback = secondaryByKey.get(key);
+    used.add(key);
+    return fallback ? mergeExerciseRecords(exercise, fallback) : exercise;
+  });
+  secondary.forEach((exercise, index) => {
+    const key = exerciseMergeKey(exercise, index);
+    if (!used.has(key)) merged.push(exercise);
+  });
+  return merged;
+}
+
+function exerciseMergeKey(exercise, index) {
+  return exercise?.id || normalizeExerciseName(exercise?.name) || `exercise-${index}`;
+}
+
+function mergeExerciseRecords(left, right) {
+  const preferred = preferExerciseRecord(left, right);
+  const fallback = preferred === left ? right : left;
+  return {
+    ...fallback,
+    ...preferred,
+    notes: preferred.notes || fallback.notes || "",
+    sets: mergeSetLists(preferred.sets, fallback.sets)
+  };
+}
+
+function preferExerciseRecord(left, right) {
+  const leftScore = exerciseDataScore(left);
+  const rightScore = exerciseDataScore(right);
+  if (Math.abs(leftScore - rightScore) >= 2) return leftScore >= rightScore ? left : right;
+  return recordTimestamp(left) >= recordTimestamp(right) ? left : right;
+}
+
+function exerciseDataScore(exercise) {
+  if (!exercise) return 0;
+  let score = exercise.name ? 2 : 0;
+  if (exercise.notes) score += 3 + Math.min(8, String(exercise.notes).length / 25);
+  for (const set of exercise.sets ?? []) {
+    score += 1 + setDataScore(set);
+  }
+  return score;
+}
+
+function mergeSetLists(primary = [], secondary = []) {
+  const secondaryById = new Map();
+  secondary.forEach((set, index) => {
+    secondaryById.set(set?.id || `index-${index}`, { set, index });
+  });
+  const used = new Set();
+  const merged = primary.map((set, index) => {
+    const key = set?.id || `index-${index}`;
+    const fallback = secondaryById.get(key)?.set ?? secondary[index];
+    used.add(key);
+    if (fallback) used.add(fallback.id || `index-${secondary.indexOf(fallback)}`);
+    return fallback ? mergeSetRecords(set, fallback) : hydrateSet(set);
+  });
+  secondary.forEach((set, index) => {
+    const key = set?.id || `index-${index}`;
+    if (!used.has(key)) merged.push(hydrateSet(set));
+  });
+  return merged;
+}
+
+function mergeSetRecords(left, right) {
+  const preferred = preferSetRecord(left, right);
+  const fallback = preferred === left ? right : left;
+  return hydrateSet({
+    ...fallback,
+    ...preferred,
+    weight: preferred.weight !== "" && preferred.weight != null ? preferred.weight : fallback.weight,
+    reps: preferred.reps !== "" && preferred.reps != null ? preferred.reps : fallback.reps,
+    rir: preferred.rir !== "" && preferred.rir != null ? preferred.rir : fallback.rir,
+    left: mergeSideSet(preferred.left, fallback.left),
+    right: mergeSideSet(preferred.right, fallback.right)
+  });
+}
+
+function preferSetRecord(left, right) {
+  const leftScore = setDataScore(left);
+  const rightScore = setDataScore(right);
+  if (leftScore !== rightScore) return leftScore >= rightScore ? left : right;
+  return recordTimestamp(left) >= recordTimestamp(right) ? left : right;
+}
+
+function setDataScore(set) {
+  if (!set) return 0;
+  let score = 0;
+  if (Number(set.weight) > 0) score += 4;
+  if (Number(set.reps) > 0) score += 4;
+  if (String(set.rir ?? "").trim() !== "") score += 3;
+  score += sideSetDataScore(set.left);
+  score += sideSetDataScore(set.right);
+  return score;
+}
+
+function sideSetDataScore(set) {
+  if (!set) return 0;
+  let score = 0;
+  if (Number(set.weight) > 0) score += 4;
+  if (Number(set.reps) > 0) score += 4;
+  if (String(set.rir ?? "").trim() !== "") score += 3;
+  return score;
+}
+
+function mergeSideSet(primary = {}, fallback = {}) {
+  return {
+    weight: primary.weight !== "" && primary.weight != null ? primary.weight : fallback.weight ?? "",
+    reps: primary.reps !== "" && primary.reps != null ? primary.reps : fallback.reps ?? "",
+    rir: primary.rir !== "" && primary.rir != null ? primary.rir : fallback.rir ?? ""
+  };
+}
+
+function recoverStateFromLocalBackups(baseState, options = {}) {
+  const allowActiveRestore = options.allowActiveRestore !== false;
+  const base = hydrateState(baseState ?? {});
+  const deleted = new Set(base.deletedSessionIds ?? []);
+  const backupStates = readStateBackups();
+  const archivedSessions = readArchivedSessions();
+  const backupSessions = backupStates.flatMap(item => item.sessions ?? []);
+  const sessions = mergeById(base.sessions, archivedSessions, backupSessions)
+    .filter(session => !deleted.has(session.id))
+    .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+  const activeWorkout = base.activeWorkout ?? (allowActiveRestore ? newestRecoverableActiveWorkout(backupStates, sessions, deleted) : null);
+  const recovered = {
+    ...base,
+    sessions,
+    activeWorkout,
+    updatedAt: [base.updatedAt, latestStateTimestamp({ ...base, sessions, activeWorkout })].sort().at(-1)
+  };
+  return recovered;
+}
+
+function newestRecoverableActiveWorkout(backupStates, sessions, deleted) {
+  const sessionIds = new Set(sessions.map(session => session.id));
+  const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+  return backupStates
+    .map(item => item.activeWorkout)
+    .filter(Boolean)
+    .filter(workout => !sessionIds.has(workout.id) && !deleted.has(workout.id))
+    .filter(workout => recordTimestamp(workout) >= cutoff && workoutDataScore(workout) > 4)
+    .sort((a, b) => recordTimestamp(b) - recordTimestamp(a))[0] ?? null;
+}
+
+function archiveCompletedSession(session) {
+  if (demoMode) return;
+  const archived = mergeById([session], readArchivedSessions())
+    .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+  writeArchivedSessions(archived);
+}
+
+function writeStateBackup(snapshot, reason) {
+  if (demoMode) return;
+  const safeState = hydrateState(snapshot);
+  if (safeState.sessions.length) {
+    const archived = mergeById(safeState.sessions, readArchivedSessions())
+      .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+    writeArchivedSessions(archived);
+  }
+  const backups = readStateBackupsRaw();
+  if (backups[0]?.state && statesEqual(backups[0].state, safeState)) return;
+  backups.unshift({
+    id: uuid(),
+    savedAt: safeState.updatedAt ?? new Date().toISOString(),
+    reason,
+    state: safeState
+  });
+  localStorage.setItem(backupKey, JSON.stringify(backups.slice(0, maxStateBackups)));
+}
+
+function readArchivedSessions() {
+  return readJsonArray(sessionArchiveKey).map(hydrateWorkoutLike);
+}
+
+function writeArchivedSessions(sessions) {
+  localStorage.setItem(sessionArchiveKey, JSON.stringify(mergeById(sessions).slice(0, 1000)));
+}
+
+function readStateBackups() {
+  return readStateBackupsRaw()
+    .map(item => item?.state ?? item)
+    .map(item => hydrateState(item ?? {}))
+    .filter(stateHasUserData);
+}
+
+function readStateBackupsRaw() {
+  return readJsonArray(backupKey);
+}
+
+function readJsonArray(key) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    localStorage.removeItem(key);
+    return [];
+  }
 }
 
 function statesEqual(left, right) {
@@ -2139,7 +2442,11 @@ async function signOut() {
 }
 
 function scheduleCloudSync() {
-  if (!cloudClient || !cloudUser || demoMode || cloudSyncing) return;
+  if (!cloudClient || !cloudUser || demoMode) return;
+  if (cloudSyncing) {
+    cloudSyncPending = true;
+    return;
+  }
   clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(() => {
     void pushCloudState(false);
@@ -2162,15 +2469,16 @@ async function pullCloudState() {
   }
 
   if (data?.data) {
-    const localState = hydrateState(state);
+    const localState = recoverStateFromLocalBackups(hydrateState(state));
     const remoteState = hydrateState({
       ...data.data,
       updatedAt: data.updated_at ?? data.data.updatedAt
     });
-    const merged = mergeCloudStates(localState, remoteState);
+    const merged = recoverStateFromLocalBackups(mergeCloudStates(localState, remoteState), { allowActiveRestore: false });
     const shouldPushLocal = stateHasUserData(localState) && (!stateHasUserData(remoteState) || !statesEqual(merged, remoteState));
     state = merged;
     localStorage.setItem(storageKey, JSON.stringify(state));
+    writeStateBackup(state, "cloud-merge");
     refreshSelectionsAfterStateLoad();
     cloudStatus = "Synced";
     if (shouldPushLocal) await pushCloudState(false);
@@ -2182,16 +2490,23 @@ async function pullCloudState() {
 
 async function pushCloudState(manual) {
   if (!cloudClient || !cloudUser || demoMode) return;
-  if (cloudSyncing) return;
+  if (cloudSyncing) {
+    cloudSyncPending = true;
+    return;
+  }
   cloudSyncing = true;
+  cloudSyncPending = false;
   cloudStatus = "Syncing...";
   if (manual) render();
+  const outgoingState = recoverStateFromLocalBackups(hydrateState(state), { allowActiveRestore: false });
+  state = outgoingState;
+  localStorage.setItem(storageKey, JSON.stringify(state));
   const { error } = await cloudClient
     .from("workout_data")
     .upsert({
       user_id: cloudUser.id,
-      data: state,
-      updated_at: state.updatedAt ?? new Date().toISOString()
+      data: outgoingState,
+      updated_at: outgoingState.updatedAt ?? new Date().toISOString()
     });
   cloudSyncing = false;
   cloudStatus = error ? "Sync failed" : "Synced";
@@ -2199,6 +2514,10 @@ async function pushCloudState(manual) {
   if (manual) {
     render();
     if (!error) showToast("Cloud synced");
+  }
+  if (cloudSyncPending) {
+    cloudSyncPending = false;
+    scheduleCloudSync();
   }
 }
 

@@ -15,7 +15,8 @@ const icons = {
   template: "M5 4h14v16H5V4Zm2 2v3h10V6H7Zm0 5v7h4v-7H7Zm6 0v2h4v-2h-4Zm0 4v3h4v-3h-4Z",
   calendar: "M7 2h2v2h6V2h2v2h3v18H4V4h3V2Zm11 8H6v10h12V10ZM6 8h12V6H6v2Z",
   target: "M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm0 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z",
-  chart: "M4 19h16v2H2V3h2v16Zm3-2V9h3v8H7Zm5 0V5h3v12h-3Zm5 0v-6h3v6h-3Z"
+  chart: "M4 19h16v2H2V3h2v16Zm3-2V9h3v8H7Zm5 0V5h3v12h-3Zm5 0v-6h3v6h-3Z",
+  grip: "M8 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm11-14a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z"
 };
 
 const demoTemplates = [
@@ -221,6 +222,8 @@ let editingTemplate = null;
 let toastTimer = null;
 let timerInterval = null;
 let biasRenderTimer = null;
+let pointerDragState = null;
+let pointerDragEventsReady = false;
 let cloudClient = null;
 let cloudUser = null;
 let cloudEmail = "";
@@ -275,6 +278,28 @@ function render() {
   `;
   wireEvents();
   startTimerRefresh();
+}
+
+function renderWithScrollRestore() {
+  const scrollState = captureScrollState();
+  render();
+  restoreScrollState(scrollState);
+}
+
+function captureScrollState() {
+  const modal = document.querySelector("[data-modal]");
+  return {
+    windowY: window.scrollY,
+    modalTop: modal?.scrollTop ?? null
+  };
+}
+
+function restoreScrollState(scrollState) {
+  requestAnimationFrame(() => {
+    window.scrollTo(0, scrollState.windowY ?? 0);
+    const modal = document.querySelector("[data-modal]");
+    if (modal && scrollState.modalTop != null) modal.scrollTop = scrollState.modalTop;
+  });
 }
 
 function renderTabs() {
@@ -753,8 +778,9 @@ function renderTemplateExercisePreview(exercise) {
 
 function renderEditableExercise(exercise, index, scope) {
   return `
-    <section class="exercise-card" data-exercise-index="${index}" data-scope="${scope}">
+    <section class="exercise-card" data-exercise-index="${index}" data-scope="${scope}" data-drop-exercise-index="${index}">
       <div class="exercise-head">
+        ${renderDragHandle(scope, index)}
         <div class="field">
           <label>Exercise</label>
           <input value="${escapeAttribute(exercise.name)}" data-bind="${scope}.exercise.${index}.name">
@@ -779,8 +805,9 @@ function renderEditableExercise(exercise, index, scope) {
 
 function renderTemplateExerciseEditor(exercise, index) {
   return `
-    <section class="exercise-card" data-exercise-index="${index}" data-scope="template">
+    <section class="exercise-card" data-exercise-index="${index}" data-scope="template" data-drop-exercise-index="${index}">
       <div class="exercise-head">
+        ${renderDragHandle("template", index)}
         <div class="field">
           <label>Exercise</label>
           <input value="${escapeAttribute(exercise.name)}" data-bind="template.exercise.${index}.name">
@@ -794,6 +821,14 @@ function renderTemplateExerciseEditor(exercise, index) {
         <textarea data-bind="template.exercise.${index}.notes">${escapeHtml(exercise.notes)}</textarea>
       </div>
     </section>
+  `;
+}
+
+function renderDragHandle(scope, index) {
+  return `
+    <span class="drag-handle" title="Drag to reorder" draggable="true" data-drag-exercise-index="${index}" data-scope="${scope}">
+      ${icon("grip")}
+    </span>
   `;
 }
 
@@ -960,8 +995,58 @@ function wireEvents() {
     field.addEventListener("input", () => {
       updateBinding(field.dataset.bind, field.value);
     });
+    field.addEventListener("blur", () => {
+      if (field.dataset.bind.includes(".exercise.") && field.dataset.bind.endsWith(".name")) {
+        renderWithScrollRestore();
+      }
+    });
   });
 
+  document.querySelectorAll("[data-drag-exercise-index]").forEach(handle => {
+    handle.addEventListener("pointerdown", event => {
+      startPointerDrag(event, handle);
+    });
+    handle.addEventListener("dragstart", event => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", JSON.stringify({
+        scope: handle.dataset.scope,
+        index: Number(handle.dataset.dragExerciseIndex)
+      }));
+      handle.closest(".exercise-card")?.classList.add("dragging");
+    });
+    handle.addEventListener("dragend", () => {
+      document.querySelectorAll(".exercise-card.dragging, .exercise-card.drag-over").forEach(card => {
+        card.classList.remove("dragging", "drag-over");
+      });
+    });
+  });
+
+  if (!pointerDragEventsReady) {
+    document.addEventListener("pointermove", updatePointerDrag);
+    document.addEventListener("pointerup", finishPointerDrag);
+    document.addEventListener("pointercancel", cancelPointerDrag);
+    pointerDragEventsReady = true;
+  }
+
+  document.querySelectorAll("[data-drop-exercise-index]").forEach(card => {
+    card.addEventListener("dragover", event => {
+      event.preventDefault();
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", () => {
+      card.classList.remove("drag-over");
+    });
+    card.addEventListener("drop", event => {
+      event.preventDefault();
+      card.classList.remove("drag-over");
+      try {
+        const drag = JSON.parse(event.dataTransfer.getData("text/plain"));
+        reorderExercise(drag.scope, Number(drag.index), Number(card.dataset.dropExerciseIndex));
+      } catch {
+        showToast("Could not reorder");
+      }
+    });
+  });
 }
 
 async function handleAction(action, element) {
@@ -1007,15 +1092,15 @@ async function handleAction(action, element) {
     case "today":
       selectedCalendarDate = dateKey(new Date());
       visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
-      render();
+      renderWithScrollRestore();
       break;
     case "add-active-exercise":
       state.activeWorkout.exercises.push(newExercise("New Exercise"));
-      saveAndRender("Exercise added");
+      saveAndRender("Exercise added", true);
       break;
     case "add-template-exercise":
       editingTemplate.exercises.push(newTemplateExercise("New Exercise"));
-      render();
+      renderWithScrollRestore();
       break;
     case "remove-exercise":
       removeExercise(element.dataset.scope, Number(element.dataset.exerciseIndex));
@@ -1192,7 +1277,7 @@ function removeExercise(scope, exerciseIndex) {
   if (!target) return;
   target.exercises.splice(exerciseIndex, 1);
   if (scope === "active") saveState();
-  render();
+  renderWithScrollRestore();
 }
 
 function setTrackingMode(scope, exerciseIndex, mode) {
@@ -1203,7 +1288,56 @@ function setTrackingMode(scope, exerciseIndex, mode) {
   exercise.trackingMode = mode === "unilateral" ? "unilateral" : "bilateral";
   exercise.sets = (exercise.sets ?? []).map(set => hydrateSet(set, exercise.trackingMode));
   if (scope === "active") saveState();
-  render();
+  renderWithScrollRestore();
+}
+
+function reorderExercise(scope, fromIndex, toIndex) {
+  if (scope !== "active" && scope !== "template") return;
+  if (fromIndex === toIndex) return;
+  const target = scope === "template" ? editingTemplate : state.activeWorkout;
+  if (!target?.exercises) return;
+  if (fromIndex < 0 || toIndex < 0 || fromIndex >= target.exercises.length || toIndex >= target.exercises.length) return;
+  const [moved] = target.exercises.splice(fromIndex, 1);
+  target.exercises.splice(toIndex, 0, moved);
+  if (scope === "active") saveState();
+  renderWithScrollRestore();
+  showToast("Exercise reordered");
+}
+
+function startPointerDrag(event, handle) {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  pointerDragState = {
+    scope: handle.dataset.scope,
+    fromIndex: Number(handle.dataset.dragExerciseIndex),
+    overIndex: Number(handle.dataset.dragExerciseIndex),
+    pointerId: event.pointerId
+  };
+  handle.setPointerCapture?.(event.pointerId);
+  handle.closest(".exercise-card")?.classList.add("dragging");
+  event.preventDefault();
+}
+
+function updatePointerDrag(event) {
+  if (!pointerDragState || pointerDragState.pointerId !== event.pointerId) return;
+  const card = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-drop-exercise-index]");
+  document.querySelectorAll(".exercise-card.drag-over").forEach(item => item.classList.remove("drag-over"));
+  if (!card || card.dataset.scope !== pointerDragState.scope) return;
+  pointerDragState.overIndex = Number(card.dataset.dropExerciseIndex);
+  card.classList.add("drag-over");
+}
+
+function finishPointerDrag(event) {
+  if (!pointerDragState || pointerDragState.pointerId !== event.pointerId) return;
+  const { scope, fromIndex, overIndex } = pointerDragState;
+  cancelPointerDrag();
+  reorderExercise(scope, fromIndex, overIndex);
+}
+
+function cancelPointerDrag() {
+  pointerDragState = null;
+  document.querySelectorAll(".exercise-card.dragging, .exercise-card.drag-over").forEach(card => {
+    card.classList.remove("dragging", "drag-over");
+  });
 }
 
 function addSet(scope, exerciseIndex) {
@@ -1212,7 +1346,7 @@ function addSet(scope, exerciseIndex) {
   const sets = target.exercises[exerciseIndex].sets;
   sets.push(newSet());
   if (scope === "active") saveState();
-  render();
+  renderWithScrollRestore();
 }
 
 function removeSet(scope, exerciseIndex, setIndex) {
@@ -1220,7 +1354,7 @@ function removeSet(scope, exerciseIndex, setIndex) {
   if (!target) return;
   target.exercises[exerciseIndex].sets.splice(setIndex, 1);
   if (scope === "active") saveState();
-  render();
+  renderWithScrollRestore();
 }
 
 function newWorkout(title, exercises) {
@@ -1843,9 +1977,13 @@ function isSeedTemplate(template) {
   );
 }
 
-function saveAndRender(message) {
+function saveAndRender(message, preserveScroll = false) {
   saveState();
-  render();
+  if (preserveScroll) {
+    renderWithScrollRestore();
+  } else {
+    render();
+  }
   showToast(message);
 }
 
@@ -2000,7 +2138,11 @@ function refreshSelectionsAfterStateLoad() {
 
 function scheduleBiasRender() {
   clearTimeout(biasRenderTimer);
-  biasRenderTimer = setTimeout(() => render(), 700);
+  biasRenderTimer = setTimeout(() => {
+    const active = document.activeElement;
+    if (active?.matches?.("[data-bind]")) return;
+    renderWithScrollRestore();
+  }, 700);
 }
 
 function formatDate(value) {

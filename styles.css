@@ -482,12 +482,39 @@ textarea:focus {
   box-shadow: 0 16px 42px rgba(0, 0, 0, 0.22);
 }
 
+.exercise-card.dragging {
+  opacity: 0.55;
+}
+
+.exercise-card.drag-over {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px var(--red-soft), 0 16px 42px rgba(0, 0, 0, 0.22);
+}
+
 .exercise-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: start;
   margin-bottom: 12px;
+}
+
+.drag-handle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+  color: var(--ink);
 }
 
 .sets {

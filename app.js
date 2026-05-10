@@ -2,7 +2,7 @@ const storageKey = "codex.workoutLoggerWeb.v1";
 const backupKey = "codex.workoutLoggerWeb.backups.v1";
 const sessionArchiveKey = "codex.workoutLoggerWeb.sessionArchive.v1";
 const maxStateBackups = 60;
-const appVersion = "v15";
+const appVersion = "v16";
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
 const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
 

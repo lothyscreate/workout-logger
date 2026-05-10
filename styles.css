@@ -111,10 +111,10 @@ h1 {
 
 .account-panel {
   display: grid;
-  grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) auto auto;
+  grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) auto auto auto;
   gap: 8px;
   align-items: center;
-  min-width: min(100%, 520px);
+  min-width: min(100%, 650px);
 }
 
 .account-panel.compact,
@@ -122,6 +122,7 @@ h1 {
   display: flex;
   justify-content: flex-end;
   min-width: 0;
+  gap: 8px;
 }
 
 .account-state {

@@ -338,6 +338,7 @@ function renderAccountPanel() {
       <div class="account-panel compact">
         <span class="account-state">Local storage</span>
         <span class="account-note">Add Supabase keys to enable accounts.</span>
+        <button class="ghost-button" data-action="check-update">Check update</button>
       </div>
     `;
   }
@@ -361,6 +362,7 @@ function renderAccountPanel() {
       <input type="password" placeholder="Password" data-bind="cloud.password" autocomplete="current-password">
       <button class="ghost-button" data-action="sign-in">Sign in</button>
       <button class="button" data-action="sign-up">Create</button>
+      <button class="ghost-button" data-action="check-update">Check update</button>
     </div>
   `;
 }

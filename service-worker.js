@@ -1,9 +1,9 @@
-const cacheName = "workout-logger-v16";
+const cacheName = "workout-logger-v17";
 const assets = [
   "./",
   "./index.html",
-  "./styles.css?v=16",
-  "./app.js?v=16",
+  "./styles.css?v=17",
+  "./app.js?v=17",
   "./cloud-config.js",
   "./manifest.webmanifest",
   "./icon.svg"

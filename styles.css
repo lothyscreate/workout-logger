@@ -34,7 +34,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
   letter-spacing: 0;
 }
@@ -137,6 +138,18 @@ h1 {
   justify-content: flex-end;
   min-width: 0;
   gap: 8px;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-button {
+  flex: 0 0 auto;
 }
 
 .account-state {
@@ -466,7 +479,8 @@ label,
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 14px;
@@ -474,6 +488,10 @@ textarea {
   color: var(--ink);
   padding: 12px 12px;
   outline: none;
+}
+
+select {
+  appearance: none;
 }
 
 textarea {
@@ -487,7 +505,8 @@ textarea::placeholder {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: var(--red);
   box-shadow: 0 0 0 3px var(--red-soft);
 }
@@ -781,6 +800,26 @@ textarea:focus {
   grid-template-columns: minmax(180px, 1.3fr) repeat(3, minmax(130px, 1fr));
 }
 
+.calorie-stat strong {
+  color: #ffffff;
+}
+
+.calorie-note {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: -8px 0 16px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.calorie-note .icon {
+  color: var(--red);
+  flex: 0 0 auto;
+}
+
 .empty {
   display: grid;
   place-items: center;
@@ -831,6 +870,32 @@ textarea:focus {
   padding: 14px;
 }
 
+.settings-modal {
+  width: min(560px, 100%);
+}
+
+.settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-note {
+  margin-top: 14px;
+}
+
+.settings-note .stat {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 74px;
+}
+
+.settings-note .icon {
+  color: var(--red);
+}
+
+.settings-note .stat span {
+  grid-column: 2;
+}
+
 .toast {
   position: fixed;
   left: 50%;
@@ -879,9 +944,14 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .top-actions {
+    align-items: stretch;
+  }
+
   .account-panel {
     grid-template-columns: 1fr 1fr;
     min-width: 0;
+    flex: 1 1 auto;
   }
 
   .account-panel .button,
@@ -920,6 +990,12 @@ textarea:focus {
 
   .account-panel {
     grid-template-columns: 1fr;
+  }
+
+  .top-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 42px;
+    align-items: start;
   }
 
   .account-actions {
@@ -986,6 +1062,10 @@ textarea:focus {
 
   .field-grid,
   .summary-band {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid {
     grid-template-columns: 1fr;
   }
 

@@ -2,7 +2,7 @@ const storageKey = "codex.workoutLoggerWeb.v1";
 const backupKey = "codex.workoutLoggerWeb.backups.v1";
 const sessionArchiveKey = "codex.workoutLoggerWeb.sessionArchive.v1";
 const maxStateBackups = 60;
-const appVersion = "v16";
+const appVersion = "v17";
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
 const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
 
@@ -20,6 +20,8 @@ const icons = {
   calendar: "M7 2h2v2h6V2h2v2h3v18H4V4h3V2Zm11 8H6v10h12V10ZM6 8h12V6H6v2Z",
   target: "M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm0 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z",
   chart: "M4 19h16v2H2V3h2v16Zm3-2V9h3v8H7Zm5 0V5h3v12h-3Zm5 0v-6h3v6h-3Z",
+  flame: "M13 2s1 3-1 5c-1.4 2.1-4 3.6-4 7a4 4 0 0 0 8 0c0-1.7-.8-3.1-2-4 .2 1.9-.7 3.1-1.8 3.8.4-2.9-1.6-5.2-3.6-6.7C5.9 9.2 4 11.7 4 15a8 8 0 0 0 16 0c0-5.2-3.7-8.6-7-13Z",
+  settings: "M19.4 13.5c.1-.5.1-1 .1-1.5s0-1-.1-1.5l2-1.5-2-3.5-2.4 1a8 8 0 0 0-2.6-1.5L14 2h-4l-.4 3A8 8 0 0 0 7 6.5l-2.4-1-2 3.5 2 1.5A9 9 0 0 0 4.5 12c0 .5 0 1 .1 1.5l-2 1.5 2 3.5 2.4-1a8 8 0 0 0 2.6 1.5l.4 3h4l.4-3a8 8 0 0 0 2.6-1.5l2.4 1 2-3.5-2-1.5ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z",
   grip: "M8 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm11-14a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z"
 };
 
@@ -224,6 +226,7 @@ if (demoMode === "advice") selectedTab = "advice";
 if (demoMode === "strength") selectedTab = "strength";
 let editingTemplate = null;
 let editingSessionId = null;
+let settingsOpen = false;
 let toastTimer = null;
 let timerInterval = null;
 let biasRenderTimer = null;
@@ -246,7 +249,8 @@ function loadState() {
     templates: [],
     activeWorkout: null,
     sessions: [],
-    deletedSessionIds: []
+    deletedSessionIds: [],
+    profile: defaultProfile()
   };
   try {
     const saved = localStorage.getItem(storageKey);
@@ -281,7 +285,7 @@ function render() {
           <p class="subline">${state.activeWorkout ? `<span data-workout-timer>${formatWorkoutDuration(state.activeWorkout)}</span> in progress` : cloudStatus}</p>
         </div>
       </div>
-      ${renderAccountPanel()}
+      ${renderHeaderActions()}
     </header>
     <div class="layout">
       <aside class="sidebar">
@@ -294,6 +298,7 @@ function render() {
     ${renderTabs()}
     ${renderUpdatePrompt()}
     ${editingTemplate ? renderTemplateModal(editingTemplate) : ""}
+    ${settingsOpen ? renderSettingsModal() : ""}
   `;
   wireEvents();
   startTimerRefresh();
@@ -345,6 +350,15 @@ function renderTabs() {
 
 function tabButton(id, label, iconName) {
   return `<button class="tab ${selectedTab === id ? "active" : ""}" data-tab="${id}">${icon(iconName)}<span>${label}</span></button>`;
+}
+
+function renderHeaderActions() {
+  return `
+    <div class="top-actions">
+      ${renderAccountPanel()}
+      <button class="icon-button settings-button" title="Settings" data-action="open-settings">${icon("settings")}</button>
+    </div>
+  `;
 }
 
 function renderAccountPanel() {
@@ -519,6 +533,7 @@ function renderTrainMain() {
 
 function renderActiveWorkout() {
   const workout = state.activeWorkout;
+  const calorieEstimate = estimateWorkoutCalories(workout);
   return `
     <div class="section-head">
       <h2>Active Workout</h2>
@@ -537,11 +552,17 @@ function renderActiveWorkout() {
       <div class="stat"><strong>${averageWeight(workout.exercises)}</strong><span>Avg Weight</span></div>
       <div class="stat"><strong>${averageRir(workout.exercises)}</strong><span>Avg RIR</span></div>
       <div class="stat"><strong data-workout-timer>${formatWorkoutDuration(workout)}</strong><span>Timer</span></div>
+      <div class="stat calorie-stat"><strong>${calorieDisplayValue(calorieEstimate)}</strong><span>Est Cal</span></div>
+      <div class="field">
+        <label for="avg-rest">Avg rest sec</label>
+        <input id="avg-rest" type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(workout.restSeconds ?? "")}" placeholder="${escapeAttribute(restSecondsPlaceholder(workout))}" data-bind="active.restSeconds">
+      </div>
       <div class="field full">
         <label for="finish-notes">Finish notes</label>
         <textarea id="finish-notes" data-bind="active.workoutNotes">${escapeHtml(workout.workoutNotes)}</textarea>
       </div>
     </section>
+    ${renderCalorieNote(calorieEstimate)}
     <div class="exercise-list">
       ${workout.exercises.map((exercise, index) => renderEditableExercise(exercise, index, "active")).join("")}
     </div>
@@ -719,6 +740,7 @@ function renderCalendarCell(cell) {
 
 function renderSessionDetail(session) {
   if (editingSessionId === session.id) return renderSessionEditor(session);
+  const calorieEstimate = estimateWorkoutCalories(session);
 
   return `
     <article class="session-detail">
@@ -738,9 +760,11 @@ function renderSessionDetail(session) {
         <div class="stat"><strong>${session.exercises.length}</strong><span>Exercises</span></div>
         <div class="stat"><strong>${countSets(session.exercises)}</strong><span>Sets</span></div>
         <div class="stat"><strong>${formatWorkoutDuration(session)}</strong><span>Duration</span></div>
+        <div class="stat calorie-stat"><strong>${calorieDisplayValue(calorieEstimate)}</strong><span>Calories</span></div>
         <div class="stat"><strong>${averageWeight(session.exercises)}</strong><span>Avg Weight</span></div>
         <div class="stat"><strong>${averageRir(session.exercises)}</strong><span>Avg RIR</span></div>
       </section>
+      ${renderCalorieNote(calorieEstimate)}
       <div class="exercise-list">
         ${session.exercises.map(exercise => renderReadOnlyExercise(exercise)).join("")}
       </div>
@@ -750,6 +774,7 @@ function renderSessionDetail(session) {
 
 function renderSessionEditor(session) {
   const scope = sessionScope(session.id);
+  const calorieEstimate = estimateWorkoutCalories(session);
   return `
     <article class="session-detail editing-session">
       <div class="section-head">
@@ -776,11 +801,17 @@ function renderSessionEditor(session) {
           <label>Duration min</label>
           <input type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(durationMinutesValue(session))}" data-bind="${scope}.durationMinutes">
         </div>
+        <div class="field">
+          <label>Avg rest sec</label>
+          <input type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(session.restSeconds ?? "")}" placeholder="${escapeAttribute(restSecondsPlaceholder(session))}" data-bind="${scope}.restSeconds">
+        </div>
+        <div class="stat calorie-stat"><strong>${calorieDisplayValue(calorieEstimate)}</strong><span>Calories</span></div>
         <div class="field full">
           <label>Workout notes</label>
           <textarea data-bind="${scope}.workoutNotes">${escapeHtml(session.workoutNotes)}</textarea>
         </div>
       </section>
+      ${renderCalorieNote(calorieEstimate)}
       <div class="exercise-list">
         ${session.exercises.map((exercise, index) => renderEditableExercise(exercise, index, scope)).join("")}
       </div>
@@ -1016,6 +1047,69 @@ function renderTemplateModal(template) {
   `;
 }
 
+function renderSettingsModal() {
+  const profile = state.profile ?? defaultProfile();
+  return `
+    <div class="modal-backdrop" data-action="close-settings">
+      <section class="modal settings-modal" role="dialog" aria-modal="true" aria-label="Settings" data-modal>
+        <div class="modal-head">
+          <h2>Settings</h2>
+          <button class="icon-button" title="Close" data-action="close-settings">${icon("x")}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field-grid settings-grid">
+            <div class="field">
+              <label>Body weight</label>
+              <input type="text" inputmode="decimal" autocomplete="off" value="${escapeAttribute(profile.weight)}" data-bind="profile.weight">
+            </div>
+            <div class="field">
+              <label>Weight unit</label>
+              <select data-bind="profile.weightUnit">
+                <option value="lb" ${selectedAttribute(profile.weightUnit, "lb")}>lb</option>
+                <option value="kg" ${selectedAttribute(profile.weightUnit, "kg")}>kg</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Height</label>
+              <input type="text" autocomplete="off" value="${escapeAttribute(profile.height)}" placeholder="${profile.heightUnit === "cm" ? "178" : "70 or 5 10"}" data-bind="profile.height">
+            </div>
+            <div class="field">
+              <label>Height unit</label>
+              <select data-bind="profile.heightUnit">
+                <option value="in" ${selectedAttribute(profile.heightUnit, "in")}>ft/in</option>
+                <option value="cm" ${selectedAttribute(profile.heightUnit, "cm")}>cm</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Age</label>
+              <input type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(profile.age)}" data-bind="profile.age">
+            </div>
+            <div class="field">
+              <label>Gender</label>
+              <select data-bind="profile.gender">
+                <option value="" ${selectedAttribute(profile.gender, "")}>Select</option>
+                <option value="male" ${selectedAttribute(profile.gender, "male")}>Male</option>
+                <option value="female" ${selectedAttribute(profile.gender, "female")}>Female</option>
+                <option value="other" ${selectedAttribute(profile.gender, "other")}>Other</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Default rest sec</label>
+              <input type="text" inputmode="numeric" autocomplete="off" value="${escapeAttribute(profile.defaultRestSeconds)}" placeholder="Auto" data-bind="profile.defaultRestSeconds">
+            </div>
+          </div>
+          <section class="settings-note">
+            <div class="stat">${icon("flame")}<strong>${calorieReadinessLabel()}</strong><span>Calorie estimate</span></div>
+          </section>
+        </div>
+        <div class="modal-foot">
+          <button class="button" data-action="close-settings">${icon("check")} Done</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function wireEvents() {
   document.querySelectorAll("[data-tab]").forEach(button => {
     button.addEventListener("click", () => {
@@ -1058,15 +1152,17 @@ function wireEvents() {
   document.querySelectorAll("[data-action]").forEach(element => {
     element.addEventListener("click", event => {
       const action = element.dataset.action;
-      if (action === "close-modal" && event.target.closest("[data-modal]") && event.target !== element) return;
+      if ((action === "close-modal" || action === "close-settings") && event.target.closest("[data-modal]") && event.target !== element) return;
       void handleAction(action, element);
     });
   });
 
   document.querySelectorAll("[data-bind]").forEach(field => {
-    field.addEventListener("input", () => {
+    const updateField = () => {
       updateBinding(field.dataset.bind, field.value);
-    });
+    };
+    field.addEventListener("input", updateField);
+    field.addEventListener("change", updateField);
     field.addEventListener("blur", () => {
       if (field.dataset.bind.includes(".exercise.") && field.dataset.bind.endsWith(".name")) {
         renderWithScrollRestore();
@@ -1199,6 +1295,14 @@ async function handleAction(action, element) {
       editingTemplate = null;
       render();
       break;
+    case "open-settings":
+      settingsOpen = true;
+      render();
+      break;
+    case "close-settings":
+      settingsOpen = false;
+      saveAndRender("Settings saved", true);
+      break;
     case "sign-in":
       await signIn();
       break;
@@ -1228,6 +1332,11 @@ function updateBinding(binding, value) {
   if (parts[0] === "cloud") {
     if (parts[1] === "email") cloudEmail = value;
     if (parts[1] === "password") cloudPassword = value;
+    return;
+  }
+
+  if (parts[0] === "profile") {
+    updateProfileBinding(parts[1], value);
     return;
   }
 
@@ -1270,6 +1379,7 @@ function updateWorkoutBinding(workout, parts, value) {
     if (finishedAt) workout.finishedAt = finishedAt;
   }
   if (parts[1] === "durationMinutes") workout.durationSeconds = minutesToDurationSeconds(value);
+  if (parts[1] === "restSeconds") workout.restSeconds = normalizeRestSecondsValue(value);
   if (parts[1] === "exercise") {
     const exercise = workout.exercises[Number(parts[2])];
     if (!exercise) return;
@@ -1306,6 +1416,7 @@ function finishWorkout() {
     durationSeconds: elapsedSeconds(state.activeWorkout),
     updatedAt: finishedAt
   });
+  session.calorieEstimate = estimateWorkoutCalories(session);
   archiveCompletedSession(session);
   state.sessions = mergeById([session], state.sessions)
     .filter(item => !state.deletedSessionIds?.includes(item.id))
@@ -1332,6 +1443,7 @@ function finishEditingSession(id) {
   const session = state.sessions.find(item => item.id === id);
   if (session) {
     session.updatedAt = new Date().toISOString();
+    session.calorieEstimate = estimateWorkoutCalories(session);
     archiveCompletedSession(session);
     selectedCalendarDate = sessionDateKey(id) ?? selectedCalendarDate;
     visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
@@ -1507,6 +1619,7 @@ function newWorkout(title, exercises) {
     title,
     startedAt: now,
     updatedAt: now,
+    restSeconds: "",
     workoutNotes: "",
     exercises
   };
@@ -1559,6 +1672,7 @@ function newExercise(name) {
 function newSet(weight = "", reps = "", rir = "") {
   return {
     id: uuid(),
+    createdAt: new Date().toISOString(),
     weight,
     reps,
     rir,
@@ -1593,6 +1707,293 @@ function averageWeight(exercises) {
 
 function displaySetValue(value) {
   return value === "" || value == null ? "-" : value;
+}
+
+function renderCalorieNote(estimate) {
+  if (!estimate.ready) {
+    return `
+      <div class="calorie-note">
+        ${icon("flame")}
+        <span>Add ${escapeHtml(joinLabels(estimate.missing))} in settings for calorie estimates.</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="calorie-note">
+      ${icon("flame")}
+      <span>${estimate.rangeLow}-${estimate.rangeHigh} kcal range, ${escapeHtml(estimate.intensityLabel)}, ${escapeHtml(estimate.restLabel)} avg rest.</span>
+    </div>
+  `;
+}
+
+function calorieDisplayValue(estimate) {
+  return estimate.ready ? String(estimate.calories) : "--";
+}
+
+function calorieReadinessLabel() {
+  const missing = calorieProfileMissingFields(state.profile);
+  return missing.length ? `Needs ${joinLabels(missing)}` : "Ready";
+}
+
+function estimateWorkoutCalories(workout, profile = state.profile) {
+  const missing = calorieProfileMissingFields(profile);
+  const durationSeconds = Math.max(60, elapsedSeconds(workout));
+  if (missing.length) {
+    return {
+      ready: false,
+      missing,
+      calories: null,
+      rangeLow: null,
+      rangeHigh: null,
+      intensityLabel: "estimate unavailable",
+      restLabel: "auto"
+    };
+  }
+
+  const weightKg = profileWeightKg(profile);
+  const heightCm = profileHeightCm(profile);
+  const age = numberFromInput(profile.age);
+  const entries = calorieSetEntries(workout);
+  const setCount = Math.max(1, entries.length || countSets(workout?.exercises ?? []));
+  const avgRir = averageRirNumber(workout?.exercises ?? []);
+  const workSeconds = estimatedWorkSeconds(entries, durationSeconds);
+  const rest = estimatedRestSeconds(workout, profile, setCount, durationSeconds, workSeconds);
+  const otherSeconds = Math.max(0, durationSeconds - workSeconds - rest.totalSeconds);
+  const bmr = mifflinStJeor({ weightKg, heightCm, age, gender: profile.gender });
+  const workMet = workoutMet(workout, entries, avgRir, rest.averageSeconds, profile);
+  const restMet = rest.averageSeconds >= 180 ? 1.35 : 1.55;
+  const otherMet = 1.75;
+  const durationMinutes = durationSeconds / 60;
+  const restingCalories = (bmr / 1440) * durationMinutes;
+  const calories =
+    restingCalories +
+    netMetCalories(workMet, workSeconds, weightKg) +
+    netMetCalories(restMet, rest.totalSeconds, weightKg) +
+    netMetCalories(otherMet, otherSeconds, weightKg);
+  const rounded = Math.max(1, Math.round(calories));
+
+  return {
+    ready: true,
+    missing: [],
+    calories: rounded,
+    rangeLow: Math.max(1, Math.round(rounded * 0.82)),
+    rangeHigh: Math.max(1, Math.round(rounded * 1.18)),
+    intensityLabel: calorieIntensityLabel(workMet),
+    restLabel: rest.source === "auto" ? `auto ${Math.round(rest.averageSeconds)}s` : `${Math.round(rest.averageSeconds)}s`
+  };
+}
+
+function calorieProfileMissingFields(profile = defaultProfile()) {
+  const missing = [];
+  if (!profileWeightKg(profile)) missing.push("weight");
+  if (!profileHeightCm(profile)) missing.push("height");
+  if (!positiveNumber(profile.age)) missing.push("age");
+  if (!["male", "female", "other"].includes(profile.gender)) missing.push("gender");
+  return missing;
+}
+
+function calorieSetEntries(workout) {
+  const entries = (workout?.exercises ?? []).flatMap(exercise => loggedSetEntries(exercise));
+  const logged = entries.filter(hasLoggedSetValue);
+  return logged.length ? logged : entries;
+}
+
+function averageRirNumber(exercises) {
+  const values = exercises
+    .flatMap(exercise => loggedSetEntries(exercise))
+    .map(entry => rirToNumber(entry.rir))
+    .filter(value => value != null);
+  if (!values.length) return null;
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function estimatedWorkSeconds(entries, durationSeconds) {
+  const rawSeconds = entries.reduce((total, entry) => {
+    const reps = positiveNumber(entry.reps) || 8;
+    return total + clamp(18 + reps * 3.2, 25, 80);
+  }, 0);
+  if (!durationSeconds) return rawSeconds;
+  return Math.min(rawSeconds, durationSeconds * 0.82);
+}
+
+function estimatedRestSeconds(workout, profile, setCount, durationSeconds, workSeconds) {
+  const intervals = Math.max(0, setCount - 1);
+  const openSeconds = Math.max(0, durationSeconds - workSeconds);
+  const configured = configuredAverageRestSeconds(workout, profile);
+  if (configured && intervals) {
+    return {
+      averageSeconds: configured.seconds,
+      totalSeconds: Math.min(openSeconds, configured.seconds * intervals),
+      source: configured.source
+    };
+  }
+
+  const inferredAverage = intervals ? openSeconds / intervals : 0;
+  return {
+    averageSeconds: inferredAverage,
+    totalSeconds: openSeconds,
+    source: "auto"
+  };
+}
+
+function configuredAverageRestSeconds(workout, profile = state.profile) {
+  const workoutRest = positiveNumber(workout?.restSeconds);
+  if (workoutRest != null) return { seconds: workoutRest, source: "workout" };
+  const defaultRest = positiveNumber(profile?.defaultRestSeconds);
+  if (defaultRest != null) return { seconds: defaultRest, source: "settings" };
+  return null;
+}
+
+function restSecondsPlaceholder(workout) {
+  const durationSeconds = elapsedSeconds(workout);
+  const entries = calorieSetEntries(workout);
+  const setCount = Math.max(1, entries.length || countSets(workout?.exercises ?? []));
+  const workSeconds = estimatedWorkSeconds(entries, durationSeconds);
+  const rest = estimatedRestSeconds(workout, state.profile, setCount, durationSeconds, workSeconds);
+  return rest.averageSeconds ? `Auto ${Math.round(rest.averageSeconds)}s` : "Auto";
+}
+
+function workoutMet(workout, entries, avgRir, averageRestSeconds, profile = state.profile) {
+  const effortFactor = avgRir == null ? 0 : clamp((3 - avgRir) * 0.18, -0.35, 0.5);
+  const densityFactor = averageRestSeconds < 60 ? 0.35 : averageRestSeconds > 240 ? -0.25 : 0;
+  const loadFactor = externalLoadFactor(entries, profile);
+  return clamp(5.1 + effortFactor + densityFactor + loadFactor, 3.8, 7.2);
+}
+
+function externalLoadFactor(entries, profile = state.profile) {
+  const bodyKg = profileWeightKg(profile);
+  if (!bodyKg) return 0;
+  const totalReps = entries.reduce((total, entry) => total + (positiveNumber(entry.reps) || 0), 0);
+  const totalLoad = entries.reduce((total, entry) => total + (positiveNumber(entry.weight) || 0) * (positiveNumber(entry.reps) || 0), 0);
+  if (!totalReps || !totalLoad) return 0;
+  const averageLoad = totalLoad / totalReps;
+  const averageLoadKg = profile.weightUnit === "kg" ? averageLoad : averageLoad / 2.20462;
+  const relativeLoad = averageLoadKg / bodyKg;
+  return clamp((relativeLoad - 0.35) * 0.22, -0.1, 0.35);
+}
+
+function calorieIntensityLabel(met) {
+  if (met >= 6.2) return "high effort";
+  if (met >= 5) return "moderate effort";
+  return "lower effort";
+}
+
+function netMetCalories(met, seconds, weightKg) {
+  const minutes = seconds / 60;
+  return Math.max(0, met - 1) * 3.5 * weightKg / 200 * minutes;
+}
+
+function mifflinStJeor({ weightKg, heightCm, age, gender }) {
+  const sexConstant = gender === "male" ? 5 : gender === "female" ? -161 : -78;
+  return 10 * weightKg + 6.25 * heightCm - 5 * age + sexConstant;
+}
+
+function profileWeightKg(profile = defaultProfile()) {
+  const weight = positiveNumber(profile.weight);
+  if (!weight) return null;
+  return profile.weightUnit === "kg" ? weight : weight / 2.20462;
+}
+
+function profileHeightCm(profile = defaultProfile()) {
+  if (profile.heightUnit === "cm") return positiveNumber(profile.height);
+  const inches = heightInchesFromInput(profile.height);
+  return inches ? inches * 2.54 : null;
+}
+
+function heightInchesFromInput(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return null;
+  const parts = text.match(/\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+  if (!parts.length) return null;
+  const hasFeetSyntax = /'|ft|feet|\s/.test(text) && parts.length >= 2;
+  if (hasFeetSyntax) {
+    const inches = parts[0] * 12 + parts[1];
+    return inches >= 36 && inches <= 96 ? inches : null;
+  }
+  const inches = parts[0];
+  return inches >= 36 && inches <= 96 ? inches : null;
+}
+
+function positiveNumber(value) {
+  const parsed = numberFromInput(value);
+  return parsed > 0 ? parsed : null;
+}
+
+function numberFromInput(value) {
+  const parsed = Number(String(value ?? "").replace(",", ".").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function defaultProfile() {
+  return {
+    weight: "",
+    weightUnit: "lb",
+    height: "",
+    heightUnit: "in",
+    age: "",
+    gender: "",
+    defaultRestSeconds: "",
+    updatedAt: null
+  };
+}
+
+function hydrateProfile(profile = {}) {
+  const defaults = defaultProfile();
+  return {
+    ...defaults,
+    weight: cleanProfileText(profile.weight),
+    weightUnit: profile.weightUnit === "kg" ? "kg" : "lb",
+    height: cleanProfileText(profile.height),
+    heightUnit: profile.heightUnit === "cm" ? "cm" : "in",
+    age: cleanProfileText(profile.age),
+    gender: ["male", "female", "other"].includes(profile.gender) ? profile.gender : "",
+    defaultRestSeconds: cleanProfileText(profile.defaultRestSeconds),
+    updatedAt: profile.updatedAt ?? null
+  };
+}
+
+function hydrateCalorieEstimate(estimate) {
+  if (!estimate || typeof estimate !== "object") return null;
+  return {
+    ready: Boolean(estimate.ready),
+    missing: Array.isArray(estimate.missing) ? estimate.missing.map(String) : [],
+    calories: Number.isFinite(Number(estimate.calories)) ? Math.round(Number(estimate.calories)) : null,
+    rangeLow: Number.isFinite(Number(estimate.rangeLow)) ? Math.round(Number(estimate.rangeLow)) : null,
+    rangeHigh: Number.isFinite(Number(estimate.rangeHigh)) ? Math.round(Number(estimate.rangeHigh)) : null,
+    intensityLabel: String(estimate.intensityLabel ?? ""),
+    restLabel: String(estimate.restLabel ?? "")
+  };
+}
+
+function updateProfileBinding(field, value) {
+  state.profile = hydrateProfile({
+    ...(state.profile ?? defaultProfile()),
+    [field]: value,
+    updatedAt: new Date().toISOString()
+  });
+  saveState("profile");
+}
+
+function cleanProfileText(value) {
+  return String(value ?? "").trimStart().slice(0, 24);
+}
+
+function normalizeRestSecondsValue(value) {
+  if (String(value ?? "").trim() === "") return "";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return "";
+  return Math.round(Math.min(parsed, 900));
+}
+
+function joinLabels(labels) {
+  if (labels.length <= 1) return labels[0] ?? "";
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function clampNumber(value, max) {
@@ -1872,6 +2273,7 @@ function hydrateState(rawState) {
     activeWorkout: rawState.activeWorkout ?? null,
     sessions: Array.isArray(rawState.sessions) ? rawState.sessions : [],
     deletedSessionIds: Array.isArray(rawState.deletedSessionIds) ? rawState.deletedSessionIds : [],
+    profile: hydrateProfile(rawState.profile),
     updatedAt: rawState.updatedAt ?? null
   };
   normalized.templates = normalized.templates.filter(template => !isSeedTemplate(template)).map(hydrateWorkoutLike);
@@ -1887,6 +2289,8 @@ function hydrateWorkoutLike(workout) {
   return {
     ...workout,
     id: workout.id ?? uuid(),
+    restSeconds: normalizeRestSecondsValue(workout.restSeconds ?? ""),
+    calorieEstimate: hydrateCalorieEstimate(workout.calorieEstimate),
     exercises: Array.isArray(workout.exercises)
       ? workout.exercises.map(exercise => ({
           ...exercise,
@@ -1904,6 +2308,7 @@ function hydrateSet(set = {}, trackingMode = "bilateral") {
   const hydrated = {
     ...set,
     id: set.id ?? uuid(),
+    createdAt: set.createdAt ?? null,
     weight: normalizeSetFieldValue("weight", set.weight ?? ""),
     reps: normalizeSetFieldValue("reps", set.reps ?? ""),
     rir: normalizeSetFieldValue("rir", set.rir ?? ""),
@@ -2103,6 +2508,7 @@ function latestStateTimestamp(value) {
   for (const template of value?.templates ?? []) {
     candidates.push(template.updatedAt, template.startedAt);
   }
+  candidates.push(value?.profile?.updatedAt);
   if (value?.activeWorkout) candidates.push(value.activeWorkout.updatedAt, value.activeWorkout.startedAt);
   const latest = candidates
     .map(item => (item ? new Date(item).getTime() : 0))
@@ -2119,7 +2525,8 @@ function stateHasUserData(value) {
   return Boolean(
     value?.activeWorkout ||
     (value?.sessions ?? []).length ||
-    (value?.templates ?? []).length
+    (value?.templates ?? []).length ||
+    profileDataScore(hydrateProfile(value?.profile)) > 0
   );
 }
 
@@ -2130,9 +2537,29 @@ function mergeCloudStates(localValue, remoteValue) {
     templates: mergeById(local.templates, remote.templates),
     sessions: mergeById(local.sessions, remote.sessions).sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt)),
     activeWorkout: newestWorkout(local.activeWorkout, remote.activeWorkout),
+    profile: mergeProfileRecords(local.profile, remote.profile),
     deletedSessionIds: [...new Set([...(local.deletedSessionIds ?? []), ...(remote.deletedSessionIds ?? [])])],
     updatedAt: [latestStateTimestamp(local), latestStateTimestamp(remote)].sort().at(-1)
   };
+}
+
+function mergeProfileRecords(left, right) {
+  const leftProfile = hydrateProfile(left);
+  const rightProfile = hydrateProfile(right);
+  const leftScore = profileDataScore(leftProfile);
+  const rightScore = profileDataScore(rightProfile);
+  if (Math.abs(leftScore - rightScore) >= 1) return leftScore >= rightScore ? leftProfile : rightProfile;
+  return recordTimestamp(leftProfile) >= recordTimestamp(rightProfile) ? leftProfile : rightProfile;
+}
+
+function profileDataScore(profile) {
+  let score = 0;
+  if (profileWeightKg(profile)) score += 1;
+  if (profileHeightCm(profile)) score += 1;
+  if (positiveNumber(profile.age)) score += 1;
+  if (profile.gender) score += 1;
+  if (positiveNumber(profile.defaultRestSeconds)) score += 0.5;
+  return score;
 }
 
 function mergeById(...groups) {
@@ -2164,6 +2591,8 @@ function mergeWorkoutRecords(left, right) {
     ...preferred,
     workoutNotes: preferred.workoutNotes || fallback.workoutNotes || "",
     notes: preferred.notes || fallback.notes || "",
+    restSeconds: preferred.restSeconds !== "" && preferred.restSeconds != null ? preferred.restSeconds : fallback.restSeconds ?? "",
+    calorieEstimate: preferred.calorieEstimate ?? fallback.calorieEstimate ?? null,
     exercises: mergeExerciseLists(preferred.exercises, fallback.exercises),
     updatedAt: preferred.updatedAt ?? fallback.updatedAt ?? new Date(Math.max(recordTimestamp(preferred), recordTimestamp(fallback))).toISOString()
   };
@@ -2740,6 +3169,10 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) {
   return escapeHtml(value).replaceAll("\n", " ");
+}
+
+function selectedAttribute(value, expected) {
+  return value === expected ? "selected" : "";
 }
 
 render();

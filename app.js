@@ -2,7 +2,7 @@ const storageKey = "codex.workoutLoggerWeb.v1";
 const backupKey = "codex.workoutLoggerWeb.backups.v1";
 const sessionArchiveKey = "codex.workoutLoggerWeb.sessionArchive.v1";
 const maxStateBackups = 60;
-const appVersion = "v18";
+const appVersion = "v19";
 const maxActiveWorkoutSeconds = 4 * 60 * 60;
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
 const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
@@ -276,35 +276,64 @@ function saveState(reason = "save") {
 
 function render() {
   const app = document.querySelector("#app");
-  app.innerHTML = `
-    <header class="topbar">
-      <div class="brand">
-        <div class="mark">${icon("bolt")}</div>
-        <div>
-          <div class="brand-title">
-            <h1>Workout Logger</h1>
-            <span class="version-pill">${appVersion}</span>
+  try {
+    app.innerHTML = `
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark">${icon("bolt")}</div>
+          <div>
+            <div class="brand-title">
+              <h1>Workout Logger</h1>
+              <span class="version-pill">${appVersion}</span>
+            </div>
+            <p class="subline">${state.activeWorkout ? `<span data-workout-timer>${formatWorkoutDuration(state.activeWorkout)}</span> in progress` : cloudStatus}</p>
           </div>
-          <p class="subline">${state.activeWorkout ? `<span data-workout-timer>${formatWorkoutDuration(state.activeWorkout)}</span> in progress` : cloudStatus}</p>
         </div>
+        ${renderHeaderActions()}
+      </header>
+      <div class="layout">
+        <aside class="sidebar">
+          ${renderSidebar()}
+        </aside>
+        <main class="main">
+          ${renderMain()}
+        </main>
       </div>
-      ${renderHeaderActions()}
-    </header>
-    <div class="layout">
-      <aside class="sidebar">
-        ${renderSidebar()}
-      </aside>
-      <main class="main">
-        ${renderMain()}
-      </main>
-    </div>
-    ${renderTabs()}
-    ${renderUpdatePrompt()}
-    ${editingTemplate ? renderTemplateModal(editingTemplate) : ""}
-    ${settingsOpen ? renderSettingsModal() : ""}
+      ${renderTabs()}
+      ${renderUpdatePrompt()}
+      ${editingTemplate ? renderTemplateModal(editingTemplate) : ""}
+      ${settingsOpen ? renderSettingsModal() : ""}
+    `;
+    app.dataset.ready = "true";
+    wireEvents();
+    startTimerRefresh();
+  } catch (error) {
+    console.error("Workout Logger render failed", error);
+    app.dataset.ready = "error";
+    app.innerHTML = renderStartupError(error);
+    wireStartupErrorEvents();
+  }
+}
+
+function renderStartupError(error) {
+  return `
+    <main class="startup-error">
+      <div class="mark">${icon("bolt")}</div>
+      <h1>Workout Logger</h1>
+      <span class="version-pill">${appVersion}</span>
+      <p>The app hit a saved-data display error while opening. Your cloud data has not been deleted.</p>
+      <button class="button" data-recovery-action="reload">Reload</button>
+      <p class="note-preview">${escapeHtml(error?.message ?? "Unknown startup error")}</p>
+    </main>
   `;
-  wireEvents();
-  startTimerRefresh();
+}
+
+function wireStartupErrorEvents() {
+  document.querySelectorAll("[data-recovery-action]").forEach(button => {
+    button.addEventListener("click", () => {
+      window.location.href = `${location.pathname}?recover=${Date.now()}`;
+    });
+  });
 }
 
 function renderUpdatePrompt() {
@@ -743,9 +772,10 @@ function renderCalendarCell(cell) {
   const selected = selectedCalendarDate === cell.key ? "selected" : "";
   const muted = cell.inMonth ? "" : "muted";
   const hasWorkouts = sessions.length ? "has-workouts" : "";
+  const cellDate = validDate(`${cell.key}T12:00:00`) ?? new Date();
   return `
     <button class="calendar-cell ${selected} ${muted} ${hasWorkouts}" data-calendar-date="${cell.key}">
-      <span>${new Date(`${cell.key}T12:00:00`).getDate()}</span>
+      <span>${cellDate.getDate()}</span>
       ${sessions.length ? `<strong>${sessions.length}</strong>` : ""}
     </button>
   `;
@@ -1446,7 +1476,7 @@ function completeActiveWorkout(options = {}) {
   archiveCompletedSession(session);
   state.sessions = mergeById([session], state.sessions)
     .filter(item => !state.deletedSessionIds?.includes(item.id))
-    .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+    .sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a));
   selectedCalendarDate = sessionDateKey(session.id) ?? dateKey(new Date());
   visibleCalendarMonth = selectedCalendarDate.slice(0, 7);
   selectedAdviceSessionId = session.id;
@@ -1482,15 +1512,15 @@ function activeWorkoutExpired(workout) {
 }
 
 function activeWorkoutAutoFinishAt(workout) {
-  const started = new Date(workout?.startedAt);
-  if (!Number.isFinite(started.getTime())) return new Date().toISOString();
+  const started = validDate(workout?.startedAt);
+  if (!started) return new Date().toISOString();
   return new Date(started.getTime() + maxActiveWorkoutSeconds * 1000).toISOString();
 }
 
 function workoutDurationSecondsAt(workout, finishedAt) {
-  const finished = new Date(finishedAt);
-  const started = new Date(workout?.startedAt);
-  if (!Number.isFinite(finished.getTime()) || !Number.isFinite(started.getTime())) return elapsedSeconds(workout);
+  const finished = validDate(finishedAt);
+  const started = validDate(workout?.startedAt);
+  if (!finished || !started) return elapsedSeconds(workout);
   return Math.max(0, Math.floor((finished - started) / 1000));
 }
 
@@ -2156,7 +2186,7 @@ function exerciseForSet(scope, exerciseIndex) {
 function previousSetForExercise(exerciseName, setIndex, side = null) {
   const normalized = normalizeExerciseName(exerciseName);
   if (!normalized) return null;
-  const sorted = [...state.sessions].sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+  const sorted = [...state.sessions].sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a));
   for (const session of sorted) {
     const exercise = session.exercises.find(item => normalizeExerciseName(item.name) === normalized);
     const set = exercise?.sets?.[setIndex];
@@ -2224,7 +2254,7 @@ function strengthPointsForExercise(name) {
       const best = bestStrengthSet(exercise);
       if (!best) return null;
       return {
-        date: dateKey(new Date(session.finishedAt ?? session.startedAt)),
+        date: sessionDateKeyFromRecord(session),
         weight: best.weight,
         reps: best.reps,
         rir: best.rir,
@@ -2282,8 +2312,9 @@ function renderStrengthGraph(points) {
 function elapsedSeconds(workout) {
   if (!workout) return 0;
   if (Number.isFinite(workout.durationSeconds)) return workout.durationSeconds;
-  const end = workout.finishedAt ? new Date(workout.finishedAt) : new Date();
-  const start = new Date(workout.startedAt);
+  const end = validDate(workout.finishedAt) ?? new Date();
+  const start = validDate(workout.startedAt);
+  if (!start) return 0;
   return Math.max(0, Math.floor((end - start) / 1000));
 }
 
@@ -2310,16 +2341,15 @@ function minutesToDurationSeconds(value) {
 
 function toDateTimeLocalValue(value) {
   if (!value) return "";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
+  const date = validDate(value);
+  if (!date) return "";
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 16);
 }
 
 function fromDateTimeLocalValue(value) {
   if (!value) return null;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  return validDate(value)?.toISOString() ?? null;
 }
 
 function startTimerRefresh() {
@@ -2407,7 +2437,7 @@ function hydrateSideSet(set = {}) {
 function sessionsByMostRecentDay() {
   const groups = new Map();
   for (const session of state.sessions) {
-    const key = dateKey(new Date(session.finishedAt ?? session.startedAt));
+    const key = sessionDateKeyFromRecord(session);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(session);
   }
@@ -2417,7 +2447,7 @@ function sessionsByMostRecentDay() {
 }
 
 function sessionsForDate(key) {
-  return state.sessions.filter(session => dateKey(new Date(session.finishedAt ?? session.startedAt)) === key);
+  return state.sessions.filter(session => sessionDateKeyFromRecord(session) === key);
 }
 
 function adviceSession() {
@@ -2426,7 +2456,7 @@ function adviceSession() {
 
 function buildAdvice(session) {
   const recent = sessionsInLastDays(14);
-  const frequency = new Set(recent.map(item => dateKey(new Date(item.finishedAt ?? item.startedAt)))).size;
+  const frequency = new Set(recent.map(sessionDateKeyFromRecord)).size;
   const totalSets = countSets(session.exercises);
   const avgRir = Number(averageRir(session.exercises));
   const duration = elapsedSeconds(session);
@@ -2550,7 +2580,7 @@ function adviceOverview(frequency, totalSets, avgRir) {
 function sessionsInLastDays(days) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - days);
-  return state.sessions.filter(session => new Date(session.finishedAt ?? session.startedAt) >= cutoff);
+  return state.sessions.filter(session => workoutDate(session) >= cutoff);
 }
 
 function summarizeMuscleSets(exercises) {
@@ -2569,7 +2599,7 @@ function summarizeMuscleSets(exercises) {
 
 function sessionDateKey(sessionId) {
   const session = state.sessions.find(item => item.id === sessionId);
-  return session ? dateKey(new Date(session.finishedAt ?? session.startedAt)) : null;
+  return session ? sessionDateKeyFromRecord(session) : null;
 }
 
 function latestStateTimestamp(value) {
@@ -2590,7 +2620,7 @@ function latestStateTimestamp(value) {
 }
 
 function recordTimestamp(record) {
-  return new Date(record?.updatedAt ?? record?.finishedAt ?? record?.startedAt ?? 0).getTime() || 0;
+  return validDate(record?.updatedAt ?? record?.finishedAt ?? record?.startedAt ?? 0)?.getTime() ?? 0;
 }
 
 function stateHasUserData(value) {
@@ -2607,7 +2637,7 @@ function mergeCloudStates(localValue, remoteValue) {
   const remote = hydrateState(remoteValue ?? {});
   return {
     templates: mergeById(local.templates, remote.templates),
-    sessions: mergeById(local.sessions, remote.sessions).sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt)),
+    sessions: mergeById(local.sessions, remote.sessions).sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a)),
     activeWorkout: newestWorkout(local.activeWorkout, remote.activeWorkout),
     profile: mergeProfileRecords(local.profile, remote.profile),
     deletedSessionIds: [...new Set([...(local.deletedSessionIds ?? []), ...(remote.deletedSessionIds ?? [])])],
@@ -2818,7 +2848,7 @@ function recoverStateFromLocalBackups(baseState, options = {}) {
   const backupSessions = backupStates.flatMap(item => item.sessions ?? []);
   const sessions = mergeById(base.sessions, archivedSessions, backupSessions)
     .filter(session => !deleted.has(session.id))
-    .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+    .sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a));
   const activeWorkout = base.activeWorkout ?? (allowActiveRestore ? newestRecoverableActiveWorkout(backupStates, sessions, deleted) : null);
   const recovered = {
     ...base,
@@ -2843,7 +2873,7 @@ function newestRecoverableActiveWorkout(backupStates, sessions, deleted) {
 function archiveCompletedSession(session) {
   if (demoMode) return;
   const archived = mergeById([session], readArchivedSessions())
-    .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+    .sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a));
   writeArchivedSessions(archived);
 }
 
@@ -2852,7 +2882,7 @@ function writeStateBackup(snapshot, reason) {
   const safeState = hydrateState(snapshot);
   if (safeState.sessions.length) {
     const archived = mergeById(safeState.sessions, readArchivedSessions())
-      .sort((a, b) => new Date(b.finishedAt ?? b.startedAt) - new Date(a.finishedAt ?? a.startedAt));
+      .sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a));
     writeArchivedSessions(archived);
   }
   const backups = readStateBackupsRaw();
@@ -2899,15 +2929,41 @@ function statesEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function validDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function workoutDate(workout) {
+  return (
+    validDate(workout?.finishedAt) ??
+    validDate(workout?.startedAt) ??
+    validDate(workout?.updatedAt) ??
+    new Date(0)
+  );
+}
+
+function workoutTimestamp(workout) {
+  return workoutDate(workout).getTime();
+}
+
+function sessionDateKeyFromRecord(session) {
+  return dateKey(workoutDate(session));
+}
+
 function dateKey(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const safeDate = validDate(date) ?? new Date();
+  const year = safeDate.getFullYear();
+  const month = String(safeDate.getMonth() + 1).padStart(2, "0");
+  const day = String(safeDate.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function calendarCells(monthKey) {
-  const [year, month] = monthKey.split("-").map(Number);
+  const [rawYear, rawMonth] = String(monthKey ?? "").split("-").map(Number);
+  const fallback = new Date();
+  const year = Number.isFinite(rawYear) ? rawYear : fallback.getFullYear();
+  const month = Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 ? rawMonth : fallback.getMonth() + 1;
   const first = new Date(year, month - 1, 1);
   const start = new Date(first);
   start.setDate(first.getDate() - first.getDay());
@@ -2922,7 +2978,10 @@ function calendarCells(monthKey) {
 }
 
 function shiftCalendarMonth(delta) {
-  const [year, month] = visibleCalendarMonth.split("-").map(Number);
+  const [rawYear, rawMonth] = String(visibleCalendarMonth ?? "").split("-").map(Number);
+  const fallback = new Date();
+  const year = Number.isFinite(rawYear) ? rawYear : fallback.getFullYear();
+  const month = Number.isFinite(rawMonth) ? rawMonth : fallback.getMonth() + 1;
   const next = new Date(year, month - 1 + delta, 1);
   visibleCalendarMonth = dateKey(next).slice(0, 7);
   selectedCalendarDate = dateKey(next);
@@ -2930,12 +2989,15 @@ function shiftCalendarMonth(delta) {
 }
 
 function formatMonthTitle(monthKey) {
-  const [year, month] = monthKey.split("-").map(Number);
-  return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(new Date(year, month - 1, 1));
+  const [rawYear, rawMonth] = String(monthKey ?? "").split("-").map(Number);
+  if (!Number.isFinite(rawYear) || !Number.isFinite(rawMonth)) return "Calendar";
+  const date = validDate(new Date(rawYear, rawMonth - 1, 1));
+  return date ? new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(date) : "Calendar";
 }
 
 function formatCalendarHeading(key) {
-  return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(new Date(`${key}T12:00:00`));
+  const date = validDate(`${key}T12:00:00`);
+  return date ? new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(date) : "Unknown date";
 }
 
 function renderMuscleBias(exerciseName) {
@@ -2961,7 +3023,8 @@ function renderMuscleBias(exerciseName) {
 }
 
 function muscleBiasForExercise(exerciseName) {
-  const normalized = exerciseName.toLowerCase();
+  const normalized = normalizeExerciseName(exerciseName);
+  if (!normalized) return null;
   return exerciseBiasRules.find(rule => rule.matches.some(match => normalized.includes(match)));
 }
 
@@ -3250,12 +3313,14 @@ function scheduleBiasRender() {
 
 function formatDate(value) {
   if (!value) return "";
+  const date = validDate(value);
+  if (!date) return "";
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit"
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function uuid() {

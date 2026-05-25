@@ -7,17 +7,45 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" href="./icon.svg" type="image/svg+xml">
     <title>Workout Logger</title>
-    <link rel="stylesheet" href="./styles.css?v=18">
+    <link rel="stylesheet" href="./styles.css?v=19">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" async></script>
     <script src="./cloud-config.js"></script>
   </head>
   <body>
-    <div id="app" class="app-shell"></div>
+    <div id="app" class="app-shell">
+      <main class="boot-screen">
+        <h1>Workout Logger</h1>
+        <p>Loading...</p>
+      </main>
+    </div>
     <template id="icon-template">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path fill="currentColor"></path>
       </svg>
     </template>
-    <script src="./app.js?v=18" defer></script>
+    <script>
+      window.addEventListener("error", () => {
+        document.documentElement.dataset.startupError = "true";
+      });
+      setTimeout(() => {
+        const app = document.querySelector("#app");
+        if (!app || app.dataset.ready === "true") return;
+        app.innerHTML = `
+          <main class="startup-error">
+            <h1>Workout Logger</h1>
+            <p>The app did not finish loading. This usually means your phone has an old cached copy.</p>
+            <button class="button" data-boot-reload>Reload app</button>
+          </main>
+        `;
+        app.querySelector("[data-boot-reload]")?.addEventListener("click", async () => {
+          if ("serviceWorker" in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map(registration => registration.unregister()));
+          }
+          window.location.href = `${location.pathname}?fresh=${Date.now()}`;
+        });
+      }, 5000);
+    </script>
+    <script src="./app.js?v=19" defer></script>
   </body>
 </html>

@@ -1,9 +1,9 @@
-const cacheName = "workout-logger-v17";
+const cacheName = "workout-logger-v18";
 const assets = [
   "./",
   "./index.html",
-  "./styles.css?v=17",
-  "./app.js?v=17",
+  "./styles.css?v=18",
+  "./app.js?v=18",
   "./cloud-config.js",
   "./manifest.webmanifest",
   "./icon.svg"
@@ -25,16 +25,39 @@ self.addEventListener("activate", event => {
 
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
-  event.respondWith(
-    fetch(event.request)
-      .then(response => {
-        const copy = response.clone();
-        caches.open(cacheName).then(cache => cache.put(event.request, copy));
-        return response;
-      })
-      .catch(() => caches.match(event.request))
-  );
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+
+  if (event.request.mode === "navigate") {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+
+  event.respondWith(staleWhileRevalidate(event.request));
 });
+
+async function networkFirst(request) {
+  const cache = await caches.open(cacheName);
+  try {
+    const response = await fetch(request);
+    cache.put(request, response.clone());
+    return response;
+  } catch {
+    return (await cache.match(request)) || cache.match("./index.html");
+  }
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+  const fetching = fetch(request)
+    .then(response => {
+      cache.put(request, response.clone());
+      return response;
+    })
+    .catch(() => cached);
+  return cached || fetching;
+}
 
 self.addEventListener("message", event => {
   if (event.data?.type === "SKIP_WAITING") {

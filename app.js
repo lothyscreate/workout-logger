@@ -2,7 +2,8 @@ const storageKey = "codex.workoutLoggerWeb.v1";
 const backupKey = "codex.workoutLoggerWeb.backups.v1";
 const sessionArchiveKey = "codex.workoutLoggerWeb.sessionArchive.v1";
 const maxStateBackups = 60;
-const appVersion = "v17";
+const appVersion = "v18";
+const maxActiveWorkoutSeconds = 4 * 60 * 60;
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
 const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
 
@@ -239,10 +240,12 @@ let cloudClient = null;
 let cloudUser = null;
 let cloudEmail = "";
 let cloudPassword = "";
-let cloudStatus = hasCloudConfig ? "Sign in to sync" : "Local only";
+let cloudAuthReady = !hasCloudConfig;
+let cloudStatus = hasCloudConfig ? "Checking account..." : "Local only";
 let cloudSyncTimer = null;
 let cloudSyncing = false;
 let cloudSyncPending = false;
+autoCompleteExpiredWorkout("startup", { silent: true, preserveScroll: false, skipRender: true });
 
 function loadState() {
   const emptyState = {
@@ -367,6 +370,16 @@ function renderAccountPanel() {
       <div class="account-panel compact">
         <span class="account-state">Local storage</span>
         <span class="account-note">Add Supabase keys to enable accounts.</span>
+        <button class="ghost-button" data-action="check-update">Check update</button>
+      </div>
+    `;
+  }
+
+  if (!cloudAuthReady) {
+    return `
+      <div class="account-panel compact">
+        <span class="account-state">${escapeHtml(cloudStatus)}</span>
+        <span class="account-note">Loading your account.</span>
         <button class="ghost-button" data-action="check-update">Check update</button>
       </div>
     `;
@@ -755,6 +768,7 @@ function renderSessionDetail(session) {
         <div class="field">
           <label>Finished</label>
           <strong>${formatDate(session.finishedAt)}</strong>
+          ${session.autoCompleted ? `<span class="note-preview">Auto-finished after 4 hours.</span>` : ""}
           ${session.workoutNotes ? `<span class="note-preview">${escapeHtml(session.workoutNotes)}</span>` : ""}
         </div>
         <div class="stat"><strong>${session.exercises.length}</strong><span>Exercises</span></div>
@@ -1409,12 +1423,24 @@ function startTemplate(id) {
 
 function finishWorkout() {
   if (!state.activeWorkout) return;
-  const finishedAt = new Date().toISOString();
+  completeActiveWorkout({
+    finishedAt: new Date().toISOString(),
+    autoCompleted: false,
+    toastMessage: "Workout finished"
+  });
+}
+
+function completeActiveWorkout(options = {}) {
+  if (!state.activeWorkout) return null;
+  const finishedAt = options.finishedAt ?? new Date().toISOString();
   const session = hydrateWorkoutLike({
     ...deepClone(state.activeWorkout),
     finishedAt,
-    durationSeconds: elapsedSeconds(state.activeWorkout),
-    updatedAt: finishedAt
+    durationSeconds: workoutDurationSecondsAt(state.activeWorkout, finishedAt),
+    updatedAt: finishedAt,
+    autoCompleted: Boolean(options.autoCompleted),
+    autoCompletedAt: options.autoCompleted ? new Date().toISOString() : null,
+    autoCompleteSource: options.autoCompleteSource ?? null
   });
   session.calorieEstimate = estimateWorkoutCalories(session);
   archiveCompletedSession(session);
@@ -1426,7 +1452,46 @@ function finishWorkout() {
   selectedAdviceSessionId = session.id;
   state.activeWorkout = null;
   selectedTab = "calendar";
-  saveAndRender("Workout finished");
+  saveState(options.autoCompleted ? "auto-complete-workout" : "finish-workout");
+  if (options.preserveScroll) {
+    renderWithScrollRestore();
+  } else if (options.skipRender !== true) {
+    render();
+  }
+  if (!options.silent) showToast(options.toastMessage ?? "Workout finished");
+  return session;
+}
+
+function autoCompleteExpiredWorkout(source = "timer", options = {}) {
+  if (!state.activeWorkout || !activeWorkoutExpired(state.activeWorkout)) return false;
+  const finishedAt = activeWorkoutAutoFinishAt(state.activeWorkout);
+  const session = completeActiveWorkout({
+    finishedAt,
+    autoCompleted: true,
+    toastMessage: "Workout auto-finished after 4 hours",
+    preserveScroll: options.preserveScroll ?? true,
+    silent: options.silent ?? false,
+    skipRender: options.skipRender ?? false,
+    autoCompleteSource: source
+  });
+  return Boolean(session);
+}
+
+function activeWorkoutExpired(workout) {
+  return elapsedSeconds(workout) >= maxActiveWorkoutSeconds;
+}
+
+function activeWorkoutAutoFinishAt(workout) {
+  const started = new Date(workout?.startedAt);
+  if (!Number.isFinite(started.getTime())) return new Date().toISOString();
+  return new Date(started.getTime() + maxActiveWorkoutSeconds * 1000).toISOString();
+}
+
+function workoutDurationSecondsAt(workout, finishedAt) {
+  const finished = new Date(finishedAt);
+  const started = new Date(workout?.startedAt);
+  if (!Number.isFinite(finished.getTime()) || !Number.isFinite(started.getTime())) return elapsedSeconds(workout);
+  return Math.max(0, Math.floor((finished - started) / 1000));
 }
 
 function editSession(id) {
@@ -2261,6 +2326,10 @@ function startTimerRefresh() {
   clearInterval(timerInterval);
   if (!state.activeWorkout) return;
   timerInterval = setInterval(() => {
+    if (autoCompleteExpiredWorkout("timer", { preserveScroll: true })) {
+      clearInterval(timerInterval);
+      return;
+    }
     document.querySelectorAll("[data-workout-timer]").forEach(element => {
       element.textContent = formatWorkoutDuration(state.activeWorkout);
     });
@@ -2291,6 +2360,9 @@ function hydrateWorkoutLike(workout) {
     id: workout.id ?? uuid(),
     restSeconds: normalizeRestSecondsValue(workout.restSeconds ?? ""),
     calorieEstimate: hydrateCalorieEstimate(workout.calorieEstimate),
+    autoCompleted: Boolean(workout.autoCompleted),
+    autoCompletedAt: workout.autoCompletedAt ?? null,
+    autoCompleteSource: workout.autoCompleteSource ?? null,
     exercises: Array.isArray(workout.exercises)
       ? workout.exercises.map(exercise => ({
           ...exercise,
@@ -2971,24 +3043,65 @@ function applyAppUpdate() {
 
 async function initCloud() {
   if (!hasCloudConfig) return;
+  cloudAuthReady = false;
+  cloudStatus = "Checking account...";
+
+  await waitForSupabaseClient();
   if (!window.supabase?.createClient) {
     cloudStatus = "Cloud library unavailable";
+    cloudAuthReady = true;
     render();
     return;
   }
 
-  cloudClient = window.supabase.createClient(cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey);
-  const { data } = await cloudClient.auth.getSession();
-  cloudUser = data.session?.user ?? null;
-  cloudStatus = cloudUser ? "Cloud connected" : "Sign in to sync";
-  if (cloudUser) await pullCloudState();
-  render();
-
-  cloudClient.auth.onAuthStateChange(async (_event, session) => {
-    cloudUser = session?.user ?? null;
+  try {
+    cloudClient = window.supabase.createClient(cloudConfig.supabaseUrl, cloudConfig.supabaseAnonKey);
+    const { data, error } = await cloudClient.auth.getSession();
+    if (error) throw error;
+    cloudUser = data.session?.user ?? null;
     cloudStatus = cloudUser ? "Cloud connected" : "Sign in to sync";
     if (cloudUser) await pullCloudState();
+  } catch (error) {
+    cloudStatus = "Cloud check failed";
+    showToast(error?.message ?? "Could not check account");
+  } finally {
+    cloudAuthReady = true;
     render();
+  }
+
+  cloudClient?.auth.onAuthStateChange(async (_event, session) => {
+    const nextUser = session?.user ?? null;
+    const userChanged = nextUser?.id !== cloudUser?.id;
+    cloudUser = nextUser;
+    cloudAuthReady = true;
+    cloudStatus = cloudUser ? "Cloud connected" : "Sign in to sync";
+    if (cloudUser && userChanged) await pullCloudState();
+    render();
+  });
+}
+
+function waitForSupabaseClient(timeoutMs = 8000) {
+  if (window.supabase?.createClient) return Promise.resolve(true);
+  return new Promise(resolve => {
+    const startedAt = Date.now();
+    const script = document.querySelector('script[src*="@supabase/supabase-js"]');
+    let done = false;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      clearInterval(timer);
+      script?.removeEventListener?.("load", onLoad);
+      script?.removeEventListener?.("error", onError);
+      resolve(value);
+    };
+    const onLoad = () => finish(Boolean(window.supabase?.createClient));
+    const onError = () => finish(false);
+    script?.addEventListener?.("load", onLoad, { once: true });
+    script?.addEventListener?.("error", onError, { once: true });
+    const timer = setInterval(() => {
+      if (window.supabase?.createClient) finish(true);
+      if (Date.now() - startedAt >= timeoutMs) finish(false);
+    }, 80);
   });
 }
 
@@ -3077,8 +3190,9 @@ async function pullCloudState() {
     localStorage.setItem(storageKey, JSON.stringify(state));
     writeStateBackup(state, "cloud-merge");
     refreshSelectionsAfterStateLoad();
+    const autoCompleted = autoCompleteExpiredWorkout("cloud", { silent: true, preserveScroll: false, skipRender: true });
     cloudStatus = "Synced";
-    if (shouldPushLocal) await pushCloudState(false);
+    if (shouldPushLocal || autoCompleted) await pushCloudState(false);
     return;
   }
 

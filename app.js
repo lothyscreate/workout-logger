@@ -1,8 +1,14 @@
 const storageKey = "codex.workoutLoggerWeb.v1";
 const backupKey = "codex.workoutLoggerWeb.backups.v1";
 const sessionArchiveKey = "codex.workoutLoggerWeb.sessionArchive.v1";
-const maxStateBackups = 60;
-const appVersion = "v19";
+const maxStateBackups = 8;
+const maxArchivedSessions = 300;
+const backupThrottleMs = 30000;
+const storageWarningCooldownMs = 15000;
+const cloudSyncDebounceMs = 2000;
+const cloudErrorToastCooldownMs = 30000;
+const criticalBackupReasons = new Set(["finish-workout", "auto-complete-workout", "cloud-merge", "delete-session"]);
+const appVersion = "v20";
 const maxActiveWorkoutSeconds = 4 * 60 * 60;
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
 const hasCloudConfig = Boolean(cloudConfig.supabaseUrl && cloudConfig.supabaseAnonKey);
@@ -245,6 +251,9 @@ let cloudStatus = hasCloudConfig ? "Checking account..." : "Local only";
 let cloudSyncTimer = null;
 let cloudSyncing = false;
 let cloudSyncPending = false;
+let lastStateBackupAt = 0;
+let lastStorageWarningAt = 0;
+let lastCloudErrorToastAt = 0;
 autoCompleteExpiredWorkout("startup", { silent: true, preserveScroll: false, skipRender: true });
 
 function loadState() {
@@ -269,7 +278,7 @@ function saveState(reason = "save") {
   state.updatedAt = now;
   if (state.activeWorkout) state.activeWorkout.updatedAt = now;
   state = recoverStateFromLocalBackups(hydrateState(state), { allowActiveRestore: false });
-  localStorage.setItem(storageKey, JSON.stringify(state));
+  savePrimaryState();
   writeStateBackup(state, reason);
   scheduleCloudSync();
 }
@@ -1197,13 +1206,22 @@ function wireEvents() {
     element.addEventListener("click", event => {
       const action = element.dataset.action;
       if ((action === "close-modal" || action === "close-settings") && event.target.closest("[data-modal]") && event.target !== element) return;
-      void handleAction(action, element);
+      void handleAction(action, element).catch(error => {
+        console.error("Workout Logger action failed", error);
+        renderWithScrollRestore();
+        showToast(friendlyErrorMessage(error));
+      });
     });
   });
 
   document.querySelectorAll("[data-bind]").forEach(field => {
     const updateField = () => {
-      updateBinding(field.dataset.bind, field.value);
+      try {
+        updateBinding(field.dataset.bind, field.value);
+      } catch (error) {
+        console.error("Workout Logger input save failed", error);
+        showToast(friendlyErrorMessage(error));
+      }
     };
     field.addEventListener("input", updateField);
     field.addEventListener("change", updateField);
@@ -2877,23 +2895,45 @@ function archiveCompletedSession(session) {
   writeArchivedSessions(archived);
 }
 
+function savePrimaryState() {
+  return writeLocalStorageItem(storageKey, JSON.stringify(state), {
+    cleanupBeforeRetry: true,
+    label: "workout data",
+    warnOnFailure: true
+  });
+}
+
 function writeStateBackup(snapshot, reason) {
   if (demoMode) return;
   const safeState = hydrateState(snapshot);
-  if (safeState.sessions.length) {
+  if (reason === "cloud-merge" && safeState.sessions.length) {
     const archived = mergeById(safeState.sessions, readArchivedSessions())
       .sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a));
     writeArchivedSessions(archived);
   }
+  if (!shouldWriteStateBackup(reason)) return;
   const backups = readStateBackupsRaw();
   if (backups[0]?.state && statesEqual(backups[0].state, safeState)) return;
-  backups.unshift({
+  const nextBackups = [{
     id: uuid(),
     savedAt: safeState.updatedAt ?? new Date().toISOString(),
     reason,
     state: safeState
-  });
-  localStorage.setItem(backupKey, JSON.stringify(backups.slice(0, maxStateBackups)));
+  }, ...backups].slice(0, maxStateBackups);
+  if (writeLocalStorageItem(backupKey, JSON.stringify(nextBackups), { label: "recovery backups" })) {
+    lastStateBackupAt = Date.now();
+    return;
+  }
+  const compactBackups = nextBackups.slice(0, Math.min(3, nextBackups.length));
+  if (writeLocalStorageItem(backupKey, JSON.stringify(compactBackups), { label: "recovery backups" })) {
+    lastStateBackupAt = Date.now();
+  }
+}
+
+function shouldWriteStateBackup(reason) {
+  if (criticalBackupReasons.has(reason)) return true;
+  if (reason === "workout-edit" && Date.now() - lastStateBackupAt < backupThrottleMs) return false;
+  return true;
 }
 
 function readArchivedSessions() {
@@ -2901,7 +2941,11 @@ function readArchivedSessions() {
 }
 
 function writeArchivedSessions(sessions) {
-  localStorage.setItem(sessionArchiveKey, JSON.stringify(mergeById(sessions).slice(0, 1000)));
+  const archived = mergeById(sessions)
+    .sort((a, b) => workoutTimestamp(b) - workoutTimestamp(a))
+    .slice(0, maxArchivedSessions);
+  if (writeLocalStorageItem(sessionArchiveKey, JSON.stringify(archived), { label: "session archive" })) return;
+  writeLocalStorageItem(sessionArchiveKey, JSON.stringify(archived.slice(0, 100)), { label: "session archive" });
 }
 
 function readStateBackups() {
@@ -2923,6 +2967,96 @@ function readJsonArray(key) {
     localStorage.removeItem(key);
     return [];
   }
+}
+
+function writeLocalStorageItem(key, value, options = {}) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    if (isQuotaExceededError(error) && options.cleanupBeforeRetry !== false) {
+      compactLocalRecoveryStorage();
+      try {
+        localStorage.setItem(key, value);
+        return true;
+      } catch (retryError) {
+        if (key === storageKey && isQuotaExceededError(retryError)) {
+          clearLocalRecoveryStorage();
+          try {
+            localStorage.setItem(key, value);
+            return true;
+          } catch (finalError) {
+            reportLocalStorageIssue(finalError, options.label, options.warnOnFailure);
+            return false;
+          }
+        }
+        reportLocalStorageIssue(retryError, options.label, options.warnOnFailure);
+        return false;
+      }
+    }
+    reportLocalStorageIssue(error, options.label, options.warnOnFailure);
+    return false;
+  }
+}
+
+function compactLocalRecoveryStorage() {
+  trimLocalJsonArray(backupKey, 3);
+  trimLocalJsonArray(sessionArchiveKey, Math.min(100, maxArchivedSessions));
+}
+
+function trimLocalJsonArray(key, count) {
+  const items = readJsonArray(key).slice(0, count);
+  try {
+    if (items.length) {
+      localStorage.setItem(key, JSON.stringify(items));
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Best effort cleanup only.
+    }
+  }
+}
+
+function clearLocalRecoveryStorage() {
+  try {
+    localStorage.removeItem(backupKey);
+    localStorage.removeItem(sessionArchiveKey);
+  } catch {
+    // Best effort cleanup only.
+  }
+}
+
+function reportLocalStorageIssue(error, label = "local storage", warnUser = false) {
+  console.warn(`Could not save ${label}`, error);
+  if (!warnUser) return;
+  const now = Date.now();
+  if (now - lastStorageWarningAt < storageWarningCooldownMs) return;
+  lastStorageWarningAt = now;
+  showToast(cloudUser ? "Phone storage is full; cloud sync is still running" : "Phone storage is full; old recovery copies were cleaned");
+}
+
+function isQuotaExceededError(error) {
+  return (
+    error?.name === "QuotaExceededError" ||
+    error?.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    error?.code === 22 ||
+    error?.code === 1014 ||
+    String(error?.message ?? "").toLowerCase().includes("quota")
+  );
+}
+
+function friendlyErrorMessage(error) {
+  if (isQuotaExceededError(error)) return "Phone storage cleaned; try again";
+  return error?.message ?? "Something went wrong";
+}
+
+function friendlyCloudErrorMessage(error) {
+  if (isQuotaExceededError(error)) return "Cloud sync hit a quota; workout stayed saved here";
+  return error?.message ?? "Cloud sync failed";
 }
 
 function statesEqual(left, right) {
@@ -3223,7 +3357,7 @@ function scheduleCloudSync() {
   clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(() => {
     void pushCloudState(false);
-  }, 700);
+  }, cloudSyncDebounceMs);
 }
 
 async function pullCloudState() {
@@ -3250,7 +3384,7 @@ async function pullCloudState() {
     const merged = recoverStateFromLocalBackups(mergeCloudStates(localState, remoteState), { allowActiveRestore: false });
     const shouldPushLocal = stateHasUserData(localState) && (!stateHasUserData(remoteState) || !statesEqual(merged, remoteState));
     state = merged;
-    localStorage.setItem(storageKey, JSON.stringify(state));
+    savePrimaryState();
     writeStateBackup(state, "cloud-merge");
     refreshSelectionsAfterStateLoad();
     const autoCompleted = autoCompleteExpiredWorkout("cloud", { silent: true, preserveScroll: false, skipRender: true });
@@ -3274,17 +3408,23 @@ async function pushCloudState(manual) {
   if (manual) render();
   const outgoingState = recoverStateFromLocalBackups(hydrateState(state), { allowActiveRestore: false });
   state = outgoingState;
-  localStorage.setItem(storageKey, JSON.stringify(state));
-  const { error } = await cloudClient
-    .from("workout_data")
-    .upsert({
-      user_id: cloudUser.id,
-      data: outgoingState,
-      updated_at: outgoingState.updatedAt ?? new Date().toISOString()
-    });
+  savePrimaryState();
+  let error = null;
+  try {
+    const response = await cloudClient
+      .from("workout_data")
+      .upsert({
+        user_id: cloudUser.id,
+        data: outgoingState,
+        updated_at: outgoingState.updatedAt ?? new Date().toISOString()
+      });
+    error = response.error;
+  } catch (syncError) {
+    error = syncError;
+  }
   cloudSyncing = false;
   cloudStatus = error ? "Sync failed" : "Synced";
-  if (error) showToast(error.message);
+  if (error) showCloudSyncError(error, manual);
   if (manual) {
     render();
     if (!error) showToast("Cloud synced");
@@ -3293,6 +3433,18 @@ async function pushCloudState(manual) {
     cloudSyncPending = false;
     scheduleCloudSync();
   }
+}
+
+function showCloudSyncError(error, manual = false) {
+  const message = friendlyCloudErrorMessage(error);
+  if (manual) {
+    showToast(message);
+    return;
+  }
+  const now = Date.now();
+  if (now - lastCloudErrorToastAt < cloudErrorToastCooldownMs) return;
+  lastCloudErrorToastAt = now;
+  showToast(message);
 }
 
 function refreshSelectionsAfterStateLoad() {

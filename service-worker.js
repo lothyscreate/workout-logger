@@ -1,23 +1,23 @@
-const cacheName = "workout-logger-v20";
+const cacheName = "workout-logger-v21";
 const assets = [
   "./",
   "./index.html",
-  "./styles.css?v=20",
-  "./app.js?v=20",
+  "./styles.css?v=21",
+  "./gym-core.js?v=21",
+  "./app.js?v=21",
   "./cloud-config.js",
   "./manifest.webmanifest",
   "./icon.svg"
 ];
 
 self.addEventListener("install", event => {
-  self.skipWaiting();
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(assets)));
 });
 
 self.addEventListener("activate", event => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(key => key !== cacheName).map(key => caches.delete(key)))
+      Promise.all(keys.filter(key => key.startsWith("workout-logger-") && key !== cacheName).map(key => caches.delete(key)))
     )
   );
   self.clients.claim();
@@ -40,7 +40,7 @@ async function networkFirst(request) {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetch(request);
-    cache.put(request, response.clone());
+    if (response.ok) cache.put(request, response.clone());
     return response;
   } catch {
     return (await cache.match(request)) || cache.match("./index.html");
@@ -52,7 +52,7 @@ async function staleWhileRevalidate(request) {
   const cached = await cache.match(request);
   const fetching = fetch(request)
     .then(response => {
-      cache.put(request, response.clone());
+      if (response.ok) cache.put(request, response.clone());
       return response;
     })
     .catch(() => cached);

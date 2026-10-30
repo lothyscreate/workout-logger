@@ -17,6 +17,36 @@
   --radius-sm: 13px;
 }
 
+/* Keep the logger's established rose/charcoal identity; gym context is the anchor. */
+.gym-bar { padding: 18px clamp(16px, 4vw, 42px); background: var(--surface); border-bottom: 1px solid var(--line); }
+.gym-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.gym-heading strong { font-size: .92rem; }
+.gym-heading span, .gym-note, .field-hint, .optional { color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.gym-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 760px; }
+.gym-switch button { min-height: 62px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; text-align: left; color: var(--ink); background: var(--surface-2); font-weight: 650; }
+.gym-switch button span { display: block; margin-top: 4px; color: var(--muted); font-size: .72rem; font-weight: 400; }
+.gym-switch button[aria-pressed=true] { border-color: var(--red); background: var(--red-soft); box-shadow: inset 3px 0 0 var(--red); }
+.gym-switch button:disabled { opacity: .6; cursor: default; }
+.gym-switch button[aria-pressed=true]:disabled { opacity: 1; }
+.gym-note { margin: 12px 0 0; max-width: 70ch; }
+.gym-badge { display: inline-block; vertical-align: middle; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; font-size: .7rem; font-weight: 600; color: var(--muted); }
+.equipment-fields { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 12px; margin: 16px 0; }
+.optional { font-weight: 400; text-transform: none; margin-left: 4px; }
+.field-hint { margin-top: 5px; font-size: .73rem; }
+.previous-session { border-left: 2px solid var(--red); padding-left: 10px; color: var(--muted); font-size: .8rem; line-height: 1.5; margin: 14px 0; }
+.session-options, .template-import { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 20px; }
+.session-options summary, .template-import summary { cursor: pointer; font-size: .85rem; color: var(--muted); }
+.session-options[open] > .field { margin: 16px 0; }
+.import-row { display: flex; gap: 10px; }
+.import-row select { flex: 1; min-width: 0; }
+.account-settings { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 24px; }
+.account-settings .account-panel { min-width: 0; display: flex; flex-wrap: wrap; margin-bottom: 16px; justify-content: flex-start; }
+.account-settings .account-panel input { flex: 1 1 200px; min-width: 0; }
+button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.stat strong, .set-row input, .side-set input { font-variant-numeric: tabular-nums; }
+.version-pill { font-family: "Cascadia Mono", Consolas, monospace; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
 * {
   box-sizing: border-box;
 }
@@ -1120,4 +1150,40 @@ select:focus {
   .subline {
     white-space: normal;
   }
+}
+/* Responsive refinements come after the original mobile rules. */
+.training-layout { grid-template-columns: minmax(0, 1fr); }
+.training-layout > .sidebar { display: none; }
+.training-layout > .main { width: 100%; max-width: 1000px; margin: auto; }
+.training-summary { grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(70px, auto)); box-shadow: none; }
+.topbar { grid-template-columns: minmax(0, 1fr) auto; }
+.top-actions { display: flex; }
+.empty p { line-height: 1.65; max-width: 52ch; margin: 12px auto 0; }
+@media (max-width: 860px) {
+  .sidebar .template-list, .sidebar .history-list { display: flex; gap: 8px; overflow-x: auto; max-height: 180px; padding-bottom: 6px; }
+  .sidebar .row { flex: 0 0 240px; margin: 0; }
+  .sidebar { padding-block: 14px; }
+  .training-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .training-summary > .field { grid-column: 1 / -1; }
+  .summary-band { box-shadow: none; }
+}
+@media (max-width: 620px) {
+  .topbar { gap: 10px; padding: 14px 16px; }
+  .mark { display: none; }
+  .brand h1 { font-size: 1.15rem; }
+  .subline { font-size: .75rem; }
+  .top-actions .settings-button { font-size: .72rem; padding: 9px; min-height: 40px; }
+  .gym-heading { display: block; }
+  .gym-heading span { display: block; margin-top: 3px; }
+  .gym-switch { gap: 6px; }
+  .gym-switch button { padding: 10px; font-size: .79rem; }
+  .equipment-fields { grid-template-columns: minmax(0, 1fr) 82px; gap: 8px; }
+  .equipment-fields input, .equipment-fields select, .set-row input, .side-set input { font-size: 16px; }
+  .training-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .training-summary > .field { grid-column: 1 / -1; }
+  .session-options { padding: 14px 12px; }
+  .summary-band:not(.session-edit-grid) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .summary-band:not(.session-edit-grid) > .field { grid-column: 1 / -1; }
+  .tabs { bottom: max(12px, env(safe-area-inset-bottom)); }
+  .app-shell { padding-bottom: calc(108px + env(safe-area-inset-bottom)); }
 }

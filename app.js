@@ -2406,8 +2406,8 @@ function renderStrengthGraph(points) {
       <polyline points="${polyline}" />
       ${coords.map(coord => `<circle cx="${coord.x}" cy="${coord.y}" r="5"><title>${coord.point.date}: ${coord.point.estimate}</title></circle>`).join("")}
       <text x="${pad}" y="${pad - 8}">${max}</text>
-      <text x="${pad}" y="${height - 8}">${min}</text>
-      <text x="${pad + 28}" y="${height - 8}">${points[0].date}</text>
+      <text x="${pad}" y="${height - pad - 8}">${min}</text>
+      <text x="${pad}" y="${height - 8}">${points[0].date}</text>
       <text x="${width - pad}" y="${height - 8}" text-anchor="end">${points.at(-1).date}</text>
     </svg>
   `;

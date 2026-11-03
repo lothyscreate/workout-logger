@@ -127,13 +127,54 @@ test('cloud writes retain gym metadata and deletion markers in the existing JSON
   assert.equal(saved.data.sessions.find(s=>s.id==='old').gymId,'previous');
   assert.equal(saved.data.deletedTemplateIds[0],'deleted');
 });
-test('entry page and offline cache ship the same complete v21 asset set',()=>{
+test('weight validation retains decimals while reps remain whole numbers',()=>{
+  const a=app();
+  for (const [input,expected] of [['12.5',12.5],['27.25',27.25],['0.125',0.125],['12,5',12.5],['', ''],['  ', ''],['0',0],['-1',0],['2001.5',2000],['invalid',0],['Infinity',0]]) {
+    a.context.input=input;
+    assert.equal(a.run('normalizeSetFieldValue("weight",input)'),expected);
+  }
+  assert.equal(a.run('normalizeSetFieldValue("reps","8.7")'),9);
+  assert.equal(a.run('averageWeight([{sets:[{weight:12.5},{weight:15}]}])'),'13.75');
+});
+
+test('decimal loads survive editing, local reload, history hints, and cloud sync',async()=>{
+  const a=app();
+  a.context.input=session('decimal','apartment','10',12.5,{exercises:[exercise(12.5),exercise(0,{id:'e2',trackingMode:'unilateral',sets:[{id:'s2',left:{weight:6.25,reps:10},right:{weight:7.75,reps:10}}]})]});
+  a.run('state=hydrateState({sessions:[input]}); state.activeWorkout=newWorkout("Today",deepClone(state.sessions[0].exercises).map(exercise=>({...exercise,id:uuid()})));');
+  a.run('updateBinding("active.set.0.0.weight","27.25"); updateBinding("active.set.1.0.left.weight","11.125"); updateBinding("active.set.1.0.right.weight","12.625"); updateBinding("session:decimal.set.0.0.weight","12.75"); state=loadState();');
+  assert.equal(a.run('state.activeWorkout.exercises[0].sets[0].weight'),27.25);
+  assert.equal(a.run('state.activeWorkout.exercises[1].sets[0].left.weight'),11.125);
+  assert.equal(a.run('state.activeWorkout.exercises[1].sets[0].right.weight'),12.625);
+  assert.equal(a.run('state.sessions[0].exercises[0].sets[0].weight'),12.75);
+  assert.equal(a.run('previousPlaceholder(previousSetForExercise(state.activeWorkout.exercises[0],0),"weight")'),'Prev 12.75');
+  assert.equal(a.run('displaySetValue(state.sessions[0].exercises[0].sets[0].weight)'),12.75);
+  let saved;
+  a.context.capture=value=>{saved=value; return {error:null};};
+  await a.run('cloudUser={id:"test-user"}; cloudClient={from:()=>({upsert:async value=>capture(value)})}; pushCloudState(false);');
+  assert.equal(saved.data.activeWorkout.exercises[0].sets[0].weight,27.25);
+  assert.equal(saved.data.activeWorkout.exercises[1].sets[0].left.weight,11.125);
+  assert.equal(saved.data.activeWorkout.exercises[1].sets[0].right.weight,12.625);
+  assert.equal(saved.data.sessions[0].exercises[0].sets[0].weight,12.75);
+});
+
+test('new exercise loads default to pounds independently of body-weight units',()=>{
+  const a=app();
+  assert.equal(a.run('defaultProfile().weightUnit'),'lb');
+  a.run('state.profile=hydrateProfile({weight:"75.5",weightUnit:"kg"});');
+  assert.equal(a.run('newExercise("Press").loadUnit'),'lb');
+  assert.equal(a.run('newTemplate().exercises[0].loadUnit'),'lb');
+  assert.equal(a.run('state.profile.weightUnit'),'kg');
+  assert.equal(a.run('state.profile.weight'),'75.5');
+  assert.equal(a.run('workoutFromTemplate({name:"Saved kg routine",exercises:[{loadUnit:"kg",sets:[]}]}).exercises[0].loadUnit'),'kg');
+});
+
+test('entry page and offline cache ship the same complete v22 asset set',()=>{
   const root=path.join(__dirname,'..');
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
   const sw=fs.readFileSync(path.join(root,'service-worker.js'),'utf8');
   for(const asset of ['styles.css','gym-core.js','app.js']) {
-    assert.ok(html.includes(`./${asset}?v=21`));
-    assert.ok(sw.includes(`./${asset}?v=21`));
+    assert.ok(html.includes(`./${asset}?v=22`));
+    assert.ok(sw.includes(`./${asset}?v=22`));
     assert.ok(fs.existsSync(path.join(root,asset)));
   }
   assert.ok(html.indexOf('gym-core.js') < html.indexOf('app.js?v='));

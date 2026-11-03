@@ -8,7 +8,7 @@ const storageWarningCooldownMs = 15000;
 const cloudSyncDebounceMs = 2000;
 const cloudErrorToastCooldownMs = 30000;
 const criticalBackupReasons = new Set(["finish-workout", "auto-complete-workout", "cloud-merge", "delete-session"]);
-const appVersion = "v21";
+const appVersion = "v22";
 const domain = globalThis.WorkoutDomain;
 const maxActiveWorkoutSeconds = 4 * 60 * 60;
 const cloudConfig = window.WORKOUT_LOGGER_CLOUD ?? {};
@@ -1876,7 +1876,7 @@ function newTemplateExercise(name) {
     id: uuid(),
     name,
     equipment: "",
-    loadUnit: state.profile.weightUnit || "lb",
+    loadUnit: "lb",
     notes: "",
     trackingMode: "bilateral",
     sets: []
@@ -1888,7 +1888,7 @@ function newExercise(name) {
     id: uuid(),
     name,
     equipment: "",
-    loadUnit: state.profile.weightUnit || "lb",
+    loadUnit: "lb",
     notes: "",
     trackingMode: "bilateral",
     sets: [newSet()]
@@ -1928,7 +1928,7 @@ function averageWeight(exercises) {
   const weightedSets = exercises.flatMap(exercise => loggedSetEntries(exercise)).filter(set => Number(set.weight) > 0);
   if (!weightedSets.length) return "0";
   const average = weightedSets.reduce((total, set) => total + Number(set.weight || 0), 0) / weightedSets.length;
-  return String(Math.round(average));
+  return String(average);
 }
 
 function displaySetValue(value) {
@@ -2235,6 +2235,10 @@ function clampOptionalNumber(value, max) {
 
 function normalizeSetFieldValue(field, value) {
   if (field === "rir") return normalizeRirValue(value);
+  if (field === "weight") {
+    if (String(value ?? "").trim() === "") return "";
+    return clamp(numberFromInput(value) ?? 0, 0, maxForSetField(field));
+  }
   return clampOptionalNumber(value, maxForSetField(field));
 }
 

@@ -4,6 +4,12 @@ An installable workout logger with gym-specific routines, calendar history, insi
 
 Live app: https://lothyscreate.github.io/workout-logger/
 
+## Decimal weights and default units (v22)
+
+- Logged weights retain decimals when entering, editing, saving, reloading, and syncing, including independent left/right loads.
+- New exercises and routines default to pounds (`lb`), independently of the body-weight unit in Account & settings. Existing exercises and saved routine units are preserved; kg remains selectable.
+- Previously rounded values cannot be reconstructed automatically. Correct those entries in Days if needed.
+
 ## Gym tracking (v21)
 
 - Select Apartment, University, or Previous gym before starting. The selection is remembered on this device. An active workout keeps its original gym when you browse other gyms.
